@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIEM 資產與威脅戰情室</title>
+    
+    <!-- 1. 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 引入 Babel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+
+    <!-- 3. 設定 Tailwind 主題 -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              slate: { 850: '#1e293b' }
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- 4. 設定 Import Map -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.2.0",
+          "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+          "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+        }
+      }
+    </script>
+</head>
+<body class="bg-gray-100 text-slate-800 h-screen overflow-hidden">
+    
+    <div id="root" class="h-full flex flex-col"></div>
+
+    <!-- 5. 主程式邏輯 -->
+    <script type="text/babel" data-type="module" data-presets="react">
+        import React, { useState, useRef, useEffect, useMemo } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import * as LucideIcons from 'lucide-react';
+        
+        // Firebase SDK
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // --- Helper Components ---
+
+        const SafeText = ({ content }) => {
+            if (content === null || content === undefined) return null;
+            try {
+                if (typeof content === 'string' || typeof content === 'number') return <>{content}</>;
+                if (typeof content === 'boolean') return <>{String(content)}</>;
+                if (Array.isArray(content)) {
+                    return <>{content.map(c => (typeof c === 'object' ? JSON.stringify(c) : String(c))).join(', ')}</>;
+                }
+                if (typeof content === 'object') {
+                    if (content.seconds) return <>{new Date(content.seconds * 1000).toLocaleString()}</>;
+                    return <>{JSON.stringify(content)}</>;
+                }
+                return <>{String(content)}</>;
+            } catch (e) {
+                return <>Data Error</>;
+            }
+        };
+
+        const renderMarkdown = (text) => {
+            if (!text || typeof text !== 'string') return null;
+            const lines = text.split('\n');
+            const elements = [];
+            let tableRows = [];
+            
+            const flushTable = (idx) => {
+                if (tableRows.length === 0) return null;
+                const dataRows = tableRows.filter(row => !/^[|\s-:]+$/.test(row) && row.includes('|'));
+                if (dataRows.length === 0) return null;
+                
+                const parseRow = (rowStr) => rowStr.split('|').filter(c => c.trim() !== '').map(c => c.trim());
+                const headers = parseRow(dataRows[0]);
+                const bodyRows = dataRows.slice(1);
+                
+                return (
+                    <div key={`table-${idx}`} className="overflow-x-auto my-4 border border-gray-200 rounded-lg shadow-sm">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-slate-50">
+                                <tr>{headers.map((h, i) => <th key={i} className="px-4 py-2 text-left text-xs font-bold text-slate-700 border-r">{h}</th>)}</tr>
+                            </thead>
+                            <tbody className="bg-white divide-y">
+                                {bodyRows.map((r, i) => <tr key={i} className="hover:bg-slate-50">{parseRow(r).map((c, j) => <td key={j} className="px-4 py-2 text-xs border-r">{c}</td>)}</tr>)}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            };
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith('|')) {
+                    tableRows.push(line);
+                } else {
+                    if (tableRows.length > 0) { elements.push(flushTable(i)); tableRows = []; }
+                    if (line.startsWith('###')) {
+                        elements.push(<h3 key={i} className="font-bold text-slate-800 mt-4 border-l-4 border-indigo-500 pl-2 text-lg">{line.replace(/#/g, '')}</h3>);
+                    } else if (line.length > 0) {
+                        elements.push(<p key={i} className="text-sm text-slate-600 mb-1 leading-relaxed">{line}</p>);
+                    }
+                }
+            }
+            if (tableRows.length > 0) elements.push(flushTable('end'));
+            return elements;
+        };
+
+        const ScenarioCard = ({ scenario }) => {
+            if (!scenario) return null;
+            let severityClass = 'bg-blue-50 text-blue-600 border-blue-200';
+            if(scenario.severity==='Critical') severityClass = 'bg-rose-900 text-white border-rose-900';
+            else if(scenario.severity==='High') severityClass = 'bg-red-50 text-red-600 border-red-200';
+            else if(scenario.severity==='Medium') severityClass = 'bg-yellow-50 text-yellow-600 border-yellow-200';
+            
+            const logs = Array.isArray(scenario.logs_required) ? scenario.logs_required : typeof scenario.logs_required === 'string' ? [scenario.logs_required] : [];
+
+            return (
+                <div className="border border-slate-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow mb-3 text-sm group">
+                    <div className="flex justify-between items-start mb-2">
+                        <div className="w-full">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className={`text-xs px-2 py-0.5 rounded border font-bold ${severityClass}`}><SafeText content={scenario.severity}/></span>
+                                <span className="font-bold text-slate-800 text-base"><SafeText content={scenario.title}/></span>
+                            </div>
+                            <div className="flex justify-between items-center text-xs text-slate-400 mt-1">
+                                <span><SafeText content={scenario.source_date}/></span>
+                                <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-600 font-medium"><SafeText content={scenario.category}/></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 mt-2 border border-slate-100">
+                        <div className="mb-2"><strong>關聯邏輯:</strong> <SafeText content={scenario.correlation_logic} /></div>
+                        <div className="flex flex-wrap gap-1">
+                            {logs.map((l, i) => (
+                                <span key={i} className="bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-500 font-mono"><SafeText content={l} /></span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main Component ---
+        const WarRoom = () => {
+            const { 
+                Briefcase, Server, ShieldCheck, Target, Activity, Loader2, BrainCircuit, 
+                Cloud, CloudOff, Check, Plus, Trash, ArrowUp, ArrowDown, Settings, 
+                ListChecks, BarChart3, Wrench, Download, LayoutGrid, ScrollText, Wand2,
+                LayoutDashboard, GanttChartSquare 
+            } = LucideIcons;
+
+            const apiKey = "AIzaSyAmRqjLtOh7hR92aH7xCuKuK_Z9phGzjW8";
+            
+            // Firebase Config Logic
+            const getFirebaseConfig = () => {
+                if (typeof __firebase_config !== 'undefined') {
+                    return JSON.parse(__firebase_config);
+                } else {
+                    return {
+                        apiKey: "AIzaSyA98h3qS1RWeWuSKTWZmMmYsUG-cZl8YwE",
+                        authDomain: "siem-6dc7e.firebaseapp.com",
+                        projectId: "siem-6dc7e",
+                        storageBucket: "siem-6dc7e.firebasestorage.app",
+                        messagingSenderId: "285198821105",
+                        appId: "1:285198821105:web:17fc91f4e8567a2bdc2b50",
+                        measurementId: "G-P1SMMD2Y2X"
+                    };
+                }
+            };
+
+            const app = initializeApp(getFirebaseConfig());
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-siem-app';
+
+            // --- States ---
+            const [user, setUser] = useState(null);
+            const [syncStatus, setSyncStatus] = useState('connecting');
+            const [activeTab, setActiveTab] = useState('assets'); // 'assets', 'indicators', 'history'
+
+            // Data States
+            const [assetList, setAssetList] = useState([
+                { id: 1, category: "網路與資安設備", name: "Palo Alto Firewall", note: "邊界防護" },
+                { id: 2, category: "身分驗證", name: "Windows AD", note: "核心身分認證" },
+                { id: 3, category: "端點防護", name: "CrowdStrike", note: "全公司部署" }
+            ]);
+
+            const [threatData, setThreatData] = useState(null);
+            const [threatLoading, setThreatLoading] = useState(false);
+            const [threatHistory, setThreatHistory] = useState([]);
+            const [threatViewTab, setThreatViewTab] = useState('current');
+
+            const [playbookResult, setPlaybookResult] = useState('');
+            const [playbookLoading, setPlaybookLoading] = useState(false);
+            const [playbookHistory, setPlaybookHistory] = useState([]);
+            const [systemInput, setSystemInput] = useState('');
+            
+            const [chartData, setChartData] = useState(null);
+            const [chartLoading, setChartLoading] = useState(false);
+            const [resultViewMode, setResultViewMode] = useState('text');
+
+            const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
+            const [manageSystemsOpen, setManageSystemsOpen] = useState(false);
+            
+            const [analysisType, setAnalysisType] = useState('ALL');
+
+            const [commonSystems, setCommonSystems] = useState({
+                "網路與資安設備": ["Palo Alto Firewall", "CheckPoint Firewall", "Cisco Switch", "Cisco ASA VPN"],
+                "端點防護 (EDR)": ["CrowdStrike", "TrendMicro Apex One", "TeamT5 EDR", "WorkspaceOne MDM"],
+                "身分驗證與作業系統": ["WindowsAD", "WindowsServer", "Linux RHEL"],
+                "應用系統 (Applications)": ["SAP", "MES", "HRM", "PLM", "ELN", "GEM", "RMS"],
+                "資料庫 (Database)": ["Oracle", "MSSQL"],
+                "核心虛擬架構 (Infra)": ["Esxi Host", "Pure Storage", "RDP 遠端跳板主機"]
+            });
+            const [newSystemCategory, setNewSystemCategory] = useState("網路與資安設備");
+            const [newSystemName, setNewSystemName] = useState("");
+
+            const assetCategories = Object.keys(commonSystems);
+            const analysisOptions = [
+                { id: 'ALL', label: '綜合交叉關聯分析' },
+                { id: 'IDENTITY', label: '身分與存取威脅' },
+                { id: 'NETWORK', label: '網路邊界與異常連線' },
+                { id: 'ENDPOINT', label: '端點行為與惡意程式' },
+                { id: 'SYSTEM', label: '防禦規避與系統健康' },
+            ];
+
+            // --- Auth & Data Sync ---
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                             await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                             await signInAnonymously(auth);
+                        }
+                    } catch (err) {
+                        console.error("Auth failed:", err);
+                        setSyncStatus('error');
+                    }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if(u) setSyncStatus('synced');
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                setSyncStatus('connecting');
+
+                // Sync Assets
+                const assetsQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'assets');
+                const unsubAssets = onSnapshot(assetsQuery, (docSnapshot) => {
+                    if (docSnapshot.exists()) {
+                        const data = docSnapshot.data();
+                        if (data.items && Array.isArray(data.items)) setAssetList(data.items);
+                    }
+                });
+
+                // Sync Threat History
+                const historyQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'threatHistory');
+                const unsubHistory = onSnapshot(historyQuery, (docSnapshot) => {
+                    if (docSnapshot.exists()) {
+                        const data = docSnapshot.data();
+                        if (data.items && Array.isArray(data.items)) {
+                             setThreatHistory(data.items);
+                             if (data.items.length > 0 && !threatData) {
+                                 setThreatData(data.items[0]);
+                             }
+                        }
+                    }
+                });
+
+                // Sync Playbook History
+                const playbookQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'playbookHistory');
+                const unsubPlaybook = onSnapshot(playbookQuery, (docSnapshot) => {
+                    if (docSnapshot.exists()) {
+                        const data = docSnapshot.data();
+                        if (data.items && Array.isArray(data.items)) {
+                             setPlaybookHistory(data.items);
+                        }
+                    }
+                     setSyncStatus('synced');
+                }, () => setSyncStatus('error'));
+
+                return () => { unsubAssets(); unsubHistory(); unsubPlaybook(); };
+            }, [user]);
+
+            const saveToDB = async (collectionName, dataValue) => {
+                if (!user) return;
+                setSyncStatus('connecting');
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'data', collectionName), { items: dataValue });
+                    setSyncStatus('synced');
+                } catch (e) {
+                    setSyncStatus('error');
+                }
+            };
+
+            const saveAssetsToDB = (newAssets) => saveToDB('assets', newAssets);
+            const saveHistoryToDB = (newHistory) => saveToDB('threatHistory', newHistory);
+            const savePlaybookToDB = (newHistory) => saveToDB('playbookHistory', newHistory);
+
+            // --- Handlers ---
+            const handleAddCommonSystem = () => {
+                if (!newSystemName.trim()) return;
+                setCommonSystems(prev => ({ ...prev, [newSystemCategory]: [...(prev[newSystemCategory] || []), newSystemName.trim()] }));
+                setNewSystemName("");
+            };
+            const handleDeleteCommonSystem = (category, name) => { setCommonSystems(prev => ({ ...prev, [category]: prev[category].filter(item => item !== name) })); };
+            const handleAddAssetRow = () => { const newId = Math.max(0, ...assetList.map(a => a.id)) + 1; const newList = [...assetList, { id: newId, category: "", name: "", note: "" }]; setAssetList(newList); saveAssetsToDB(newList); };
+            const handleDeleteAssetRow = (id) => { const newList = assetList.filter(a => a.id !== id); setAssetList(newList); saveAssetsToDB(newList); };
+            const handleUpdateAssetRow = (id, field, value) => { const newList = assetList.map(a => a.id === id ? { ...a, [field]: value } : a); setAssetList(newList); saveAssetsToDB(newList); };
+            const handleMoveAssetRow = (index, direction) => { const newList = [...assetList]; if (direction === 'up' && index > 0) { [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]]; } else if (direction === 'down' && index < newList.length - 1) { [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]]; } setAssetList(newList); saveAssetsToDB(newList); };
+            const handleQuickAddAsset = (e) => { const value = e.target.value; if (!value) return; const newId = Math.max(0, ...assetList.map(a => a.id)) + 1; let category = "其他"; for (const [cat, items] of Object.entries(commonSystems)) { if (items.includes(value)) { category = cat; break; } } const newList = [...assetList, { id: newId, category: category, name: value, note: "" }]; setAssetList(newList); saveAssetsToDB(newList); e.target.value = ""; };
+            const getResultContent = (txt, mode) => { if(!txt) return ''; const p=txt.split('---SPLIT---'); return (mode==='guide' && p[1]) ? p[1].trim() : p[0].trim(); };
+
+            const fetchGeminiResponse = async (prompt) => {
+                try {
+                const payload = { contents: [{ parts: [{ text: prompt }] }] };
+                const response = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+                );
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                return data.candidates?.[0]?.content?.parts?.[0]?.text || "無法取得回應。";
+                } catch (error) { console.error("Gemini API Error:", error); throw error; }
+            };
+
+            const handleAiSuggestAssets = async () => {
+                setAiSuggestingAssets(true);
+                const categoriesStr = JSON.stringify(commonSystems);
+                const prompt = `資深 IT 架構師。從常見系統清單挑選 6-10 個 SIEM 關鍵資產。\n${categoriesStr}\nJSON Array: [{ "category", "name", "note" }]`;
+                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('['); const jsonEndIndex = rawText.lastIndexOf(']'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const suggestions = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); const startId = Math.max(0, ...assetList.map(a => a.id)) + 1; const newAssets = suggestions.map((s, i) => ({ id: startId + i, category: s.category, name: s.name, note: s.note })); const mergedList = [...assetList, ...newAssets]; setAssetList(mergedList); saveAssetsToDB(mergedList); } } catch (e) { console.error(e); } finally { setAiSuggestingAssets(false); }
+            };
+
+            const handleGenerateThreatAnalysis = async () => {
+                if (assetList.filter(a => a.name.trim() !== "").length === 0) return;
+                setThreatLoading(true); setThreatData(null); setThreatViewTab('current'); 
+                const assetString = assetList.filter(a => a.name.trim() !== "").map(a => `- [${a.category}] ${a.name} (${a.note})`).join('\n');
+                const selectedOption = analysisOptions.find(o => o.id === analysisType);
+                const analysisLabel = selectedOption ? selectedOption.label : "綜合交叉關聯分析";
+                let contextPrompt = analysisType === 'ALL' ? "全方位交叉關聯威脅分析" : `專注於「${analysisLabel}」領域進行深度分析。忽略不相關的威脅。`;
+
+                const prompt = `
+                你是一位資深 SIEM 與 SOC 架構師。請根據以下客戶的資產清單，進行：${contextPrompt}
+                資產清單：${assetString}
+                任務：
+                1. 找出該領域 (${analysisLabel}) 可能發生的攻擊路徑。
+                2. 建議針對這些情境，應該收集哪些 Log，以及關聯規則。
+                3. 請產出 5 到 10 個具體的情境。
+                4. Risk Level 請包含 "Critical", "High", "Medium", "Low" 四種。
+                5. 請務必將每個情境嚴格歸類到以下四類之一 (Category)：身分與存取威脅、網路邊界與異常連線、端點行為與惡意程式、防禦規避與系統健康。
+
+                請以 JSON 格式回傳，結構如下：
+                {
+                    "analysis_type": "${analysisLabel}",
+                    "scenarios": [
+                    {
+                        "title": "情境標題",
+                        "category": "上述四類之一",
+                        "severity": "Critical" | "High" | "Medium" | "Low",
+                        "mitre_tactic": "MITRE Tactic",
+                        "related_assets": ["資產A"],
+                        "logs_required": ["Log A"],
+                        "correlation_logic": "邏輯說明"
+                    }
+                    ],
+                    "admin_log_guide": [
+                    {
+                        "system": "系統名稱",
+                        "log_items": "需收集的項目",
+                        "config_advice": "設定建議"
+                    }
+                    ]
+                }
+                JSON 內容請用繁體中文。
+                `;
+
+                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('{'); const jsonEndIndex = rawText.lastIndexOf('}'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const result = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); const finalResult = { ...result, timestamp: new Date().toLocaleString() }; setThreatData(finalResult); const newHistory = [finalResult, ...threatHistory]; setThreatHistory(newHistory); saveHistoryToDB(newHistory); } else { throw new Error("無法解析回應資料"); } } catch (e) { console.error(e); setThreatData({ analysis_type: "錯誤", scenarios:[{title:"解析失敗", severity:"Low", related_assets:[], logs_required:["請重試"], correlation_logic:"請檢查網路或重試"}], admin_log_guide: [] }); } finally { setThreatLoading(false); }
+            };
+
+            const aggregatedHistory = useMemo(() => {
+                const stats = { byRisk: { Critical: [], High: [], Medium: [], Low: [] }, byCategory: { '身分與存取威脅': [], '網路邊界與異常連線': [], '端點行為與惡意程式': [], '防禦規避與系統健康': [] } };
+                threatHistory.forEach(record => {
+                    record.scenarios?.forEach(scenario => {
+                        if (stats.byRisk[scenario.severity]) { stats.byRisk[scenario.severity].push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); } 
+                        else if (scenario.severity === 'Critical') { stats.byRisk.Critical.push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); }
+                        
+                        let cat = scenario.category;
+                        if (!stats.byCategory[cat]) { 
+                            if (cat?.includes('身分') || cat?.includes('帳號')) cat = '身分與存取威脅'; 
+                            else if (cat?.includes('網路') || cat?.includes('連線')) cat = '網路邊界與異常連線'; 
+                            else if (cat?.includes('端點') || cat?.includes('惡意')) cat = '端點行為與惡意程式'; 
+                            else if (cat?.includes('系統') || cat?.includes('規避')) cat = '防禦規避與系統健康'; 
+                            else cat = '防禦規避與系統健康'; 
+                        }
+                        if (stats.byCategory[cat]) { stats.byCategory[cat].push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); }
+                    });
+                });
+                return stats;
+            }, [threatHistory]);
+
+            const handleGeneratePlaybook = async () => {
+                let inputToUse = systemInput; if (!inputToUse.trim() && assetList.length > 0) inputToUse = assetList.map(a => a.name).join(', ');
+                if (!inputToUse.trim()) return;
+                setPlaybookLoading(true); setPlaybookResult(''); setResultViewMode('text'); setChartData(null);
+                const prompt = `SIEM 架構師。環境：${inputToUse}。輸出兩部分(---SPLIT---)：1.策略規劃(表格), 2.技術實作(表格)。繁體中文。`;
+                try { const text = await fetchGeminiResponse(prompt); setPlaybookResult(text); 
+                      const newEntry = {id: Date.now(), timestamp: new Date().toLocaleString(), input: inputToUse, content: text};
+                      const newHistory = [newEntry, ...playbookHistory];
+                      setPlaybookHistory(newHistory); savePlaybookToDB(newHistory);
+                } catch (error) { setPlaybookResult("失敗: " + error.message); } finally { setPlaybookLoading(false); }
+            };
+
+            const handleGenerateChart = async (textContent) => {
+                if (!textContent) return; setResultViewMode('chart'); if (chartData) return; setChartLoading(true);
+                const prompt = `分析 SIEM 指標：${textContent.split('---SPLIT---')[0]}。回傳純 JSON：{"priority_stats":{}, "source_stats":{}, "category_stats":{}}`;
+                try { const raw = await fetchGeminiResponse(prompt); const jsonStr = raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1); setChartData(JSON.parse(jsonStr)); } catch (e) { setChartData({priority_stats:{"Error":1}, source_stats:{}, category_stats:{}}); } finally { setChartLoading(false); }
+            };
+
+            const handleExportTxt = (content) => {
+                 const element = document.createElement("a");
+                 const file = new Blob([content], {type: 'text/plain'});
+                 element.href = URL.createObjectURL(file);
+                 element.download = `SIEM_Report_${new Date().toISOString().slice(0,10)}.txt`;
+                 document.body.appendChild(element); element.click(); document.body.removeChild(element);
+            };
+
+            const handleDeleteHistory = (e, id) => { 
+                e.stopPropagation(); 
+                const newHistory = playbookHistory.filter(x => x.id !== id);
+                setPlaybookHistory(newHistory);
+                savePlaybookToDB(newHistory); 
+            };
+
+            return (
+                <div className="h-full flex flex-col bg-slate-50 font-sans">
+                    {/* Header */}
+                    <header className="bg-slate-900 text-white p-4 flex justify-between items-center shadow-lg shrink-0 z-20">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-indigo-600 rounded-lg shadow-inner"><Briefcase size={24} className="text-white"/></div>
+                            <div>
+                                <h1 className="text-xl font-bold tracking-wide">資產與威脅情境戰情室</h1>
+                                <p className="text-slate-400 text-xs flex items-center gap-1">SIEM War Room <span className="w-1 h-1 rounded-full bg-slate-500"></span> Asset & Threat Intelligence</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                             {syncStatus === 'connecting' && <span className="text-xs text-yellow-400 animate-pulse flex items-center gap-1 bg-yellow-400/10 px-2 py-1 rounded-full"><Cloud size={12}/> 連線中...</span>}
+                             {syncStatus === 'synced' && <span className="text-xs text-green-400 flex items-center gap-1 bg-green-400/10 px-2 py-1 rounded-full"><Check size={12}/> 已同步</span>}
+                             {syncStatus === 'error' && <span className="text-xs text-red-400 flex items-center gap-1 bg-red-400/10 px-2 py-1 rounded-full"><CloudOff size={12}/> 離線</span>}
+                        </div>
+                    </header>
+
+                    {/* Navigation Tabs */}
+                    <div className="bg-white border-b border-gray-200 px-6 flex gap-8 shrink-0 shadow-sm z-10">
+                        <button onClick={()=>setActiveTab('assets')} className={`py-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-colors ${activeTab==='assets'?'border-indigo-600 text-indigo-600':'border-transparent text-gray-500 hover:text-gray-700'}`}><Server size={16}/> 系統與威脅分析</button>
+                        <button onClick={()=>setActiveTab('indicators')} className={`py-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-colors ${activeTab==='indicators'?'border-indigo-600 text-indigo-600':'border-transparent text-gray-500 hover:text-gray-700'}`}><Target size={16}/> 監控指標產生器</button>
+                        <button onClick={()=>setActiveTab('history')} className={`py-4 text-sm font-bold flex items-center gap-2 border-b-2 transition-colors ${activeTab==='history'?'border-indigo-600 text-indigo-600':'border-transparent text-gray-500 hover:text-gray-700'}`}><LayoutDashboard size={16}/> 歷史情境戰情看板</button>
+                    </div>
+
+                    {/* Content Area */}
+                    <div className="flex-1 overflow-hidden relative">
+                        {/* TAB 1: ASSETS & THREATS */}
+                        {activeTab === 'assets' && (
+                            <div className="flex w-full h-full">
+                                {/* Left: Asset Management */}
+                                <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col p-6 overflow-hidden">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-gray-700 flex items-center gap-2"><Server className="text-indigo-500" size={18}/> 資產清單 (Inventory)</h3>
+                                        <button onClick={handleAddAssetRow} className="text-xs bg-white border hover:bg-gray-50 text-gray-600 px-2 py-1 rounded shadow-sm flex items-center gap-1"><Plus size={12}/> 新增列</button>
+                                    </div>
+
+                                    {/* Quick Add Section */}
+                                    <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm mb-4">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">快速加入</label>
+                                            <button onClick={()=>setManageSystemsOpen(true)} className="text-xs text-indigo-500 hover:underline flex items-center gap-1"><Settings size={10}/> 管理清單</button>
+                                        </div>
+                                        <div className="flex gap-2 mb-3">
+                                            <select className="flex-1 p-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-gray-50" onChange={handleQuickAddAsset}>
+                                                <option value="">選擇常見系統...</option>
+                                                {Object.entries(commonSystems).map(([cat, items]) => (
+                                                    <optgroup key={cat} label={cat}>{items.map(s=><option key={s} value={s}>{s}</option>)}</optgroup>
+                                                ))}
+                                            </select>
+                                            <button onClick={handleAiSuggestAssets} disabled={aiSuggestingAssets} className="px-3 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg shadow hover:shadow-md transition-all flex items-center gap-1 disabled:opacity-50 text-xs font-bold whitespace-nowrap">
+                                                {aiSuggestingAssets ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} AI 推薦
+                                            </button>
+                                        </div>
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">分析維度 (Focus)</label>
+                                        <select className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-indigo-50 text-indigo-900 font-medium" value={analysisType} onChange={(e)=>setAnalysisType(e.target.value)}>
+                                            {analysisOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+                                        </select>
+                                    </div>
+
+                                    {/* Asset Table */}
+                                    <div className="flex-1 overflow-y-auto bg-white rounded-xl border border-gray-200 shadow-inner">
+                                        <table className="w-full text-left border-collapse">
+                                            <thead className="bg-gray-50 sticky top-0 z-10 text-xs text-gray-500 uppercase">
+                                                <tr>
+                                                    <th className="p-3 border-b">分類</th>
+                                                    <th className="p-3 border-b">名稱</th>
+                                                    <th className="p-3 border-b w-10"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="text-sm divide-y divide-gray-100">
+                                                {assetList.map((asset, index) => (
+                                                    <tr key={asset.id} className="hover:bg-indigo-50/30 group transition-colors">
+                                                        <td className="p-2">
+                                                            <select className="w-full bg-transparent outline-none text-xs text-gray-600" value={asset.category} onChange={(e)=>handleUpdateAssetRow(asset.id,'category',e.target.value)}>
+                                                                <option value="" disabled>分類...</option>
+                                                                {assetCategories.map(c=><option key={c} value={c}>{c}</option>)}
+                                                            </select>
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <input className="w-full bg-transparent outline-none font-medium text-gray-800" value={asset.name} onChange={(e)=>handleUpdateAssetRow(asset.id,'name',e.target.value)} placeholder="輸入名稱..."/>
+                                                        </td>
+                                                        <td className="p-2 text-center">
+                                                            <button onClick={()=>handleDeleteAssetRow(asset.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash size={14}/></button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {assetList.length === 0 && <tr><td colSpan="3" className="p-8 text-center text-gray-400 text-xs">暫無資產，請從上方新增</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <button onClick={handleGenerateThreatAnalysis} disabled={threatLoading} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 transition-all transform active:scale-95">
+                                        {threatLoading ? <Loader2 className="animate-spin"/> : <Activity size={18}/>} 開始交叉分析
+                                    </button>
+                                 </div>
+
+                                 {/* Right: Analysis Result */}
+                                 <div className="w-2/3 bg-white p-6 overflow-y-auto">
+                                     <div className="flex border-b border-gray-200 mb-6">
+                                        <button onClick={()=>setThreatViewTab('current')} className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${threatViewTab==='current'?'border-indigo-600 text-indigo-600':'border-transparent text-gray-400 hover:text-gray-600'}`}>目前分析結果</button>
+                                        <button onClick={()=>setThreatViewTab('history')} className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${threatViewTab==='history'?'border-indigo-600 text-indigo-600':'border-transparent text-gray-400 hover:text-gray-600'}`}>分析歷史紀錄 ({threatHistory.length})</button>
+                                     </div>
+
+                                     {threatViewTab === 'current' ? (
+                                         <div className="animate-in fade-in duration-500">
+                                            {!threatData && !threatLoading && (
+                                                <div className="h-96 flex flex-col items-center justify-center text-gray-300">
+                                                    <BrainCircuit size={64} className="mb-4 opacity-50"/>
+                                                    <p>請在左側完善資產清單並點擊分析</p>
+                                                </div>
+                                            )}
+                                            {threatLoading && (
+                                                <div className="h-96 flex flex-col items-center justify-center text-indigo-500">
+                                                    <Loader2 size={48} className="mb-4 animate-spin"/>
+                                                    <p className="font-medium animate-pulse">AI 正在進行多維度關聯分析...</p>
+                                                </div>
+                                            )}
+                                            {threatData && (
+                                                <div className="space-y-6">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="p-2 bg-indigo-100 rounded-lg"><ShieldCheck className="text-indigo-600" size={20}/></div>
+                                                            <div>
+                                                                <h2 className="text-lg font-bold text-slate-800"><SafeText content={threatData.analysis_type} /></h2>
+                                                                <p className="text-xs text-gray-400"><SafeText content={threatData.timestamp} /></p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Admin Guide */}
+                                                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-5">
+                                                        <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm"><ScrollText size={16}/> 📋 系統管理員 Log 收集指引</h4>
+                                                        <div className="grid gap-3">
+                                                            {threatData.admin_log_guide?.map((guide, idx) => (
+                                                                <div key={idx} className="bg-white p-3 rounded border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-start">
+                                                                    <div className="md:w-1/4 font-bold text-slate-800 text-sm flex items-center gap-2"><Server size={14} className="text-gray-400"/><SafeText content={guide.system}/></div>
+                                                                    <div className="md:w-3/4 text-xs space-y-2">
+                                                                        <div className="flex gap-2">
+                                                                            <span className="text-indigo-600 font-bold whitespace-nowrap bg-indigo-50 px-1 rounded">收集項目</span> 
+                                                                            <span className="text-slate-600 leading-relaxed"><SafeText content={guide.log_items}/></span>
+                                                                        </div>
+                                                                        <div className="flex gap-2">
+                                                                            <span className="text-emerald-600 font-bold whitespace-nowrap bg-emerald-50 px-1 rounded">設定建議</span> 
+                                                                            <span className="text-slate-600 leading-relaxed"><SafeText content={guide.config_advice}/></span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Scenarios */}
+                                                    <div>
+                                                        <h4 className="font-bold text-slate-700 mb-4 text-sm flex items-center gap-2"><Activity size={16}/> 關鍵威脅情境列表</h4>
+                                                        <div className="space-y-3">
+                                                            {threatData.scenarios?.map((s, i) => <ScenarioCard key={i} scenario={s}/>)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                         </div>
+                                     ) : (
+                                         <div className="space-y-3">
+                                            {threatHistory.length === 0 && <div className="text-center text-gray-400 mt-20">尚無歷史紀錄</div>}
+                                            {threatHistory.map((history, idx) => (
+                                                <div key={idx} onClick={() => { setThreatData(history); setThreatViewTab('current'); }} className="p-4 border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-md cursor-pointer transition-all bg-white group">
+                                                    <div className="flex justify-between items-center mb-2">
+                                                        <h5 className="font-bold text-indigo-700 flex items-center gap-2"><History size={16}/> <SafeText content={history.analysis_type}/></h5>
+                                                        <span className="text-xs text-gray-400"><SafeText content={history.timestamp}/></span>
+                                                    </div>
+                                                    <div className="flex gap-4 text-xs text-gray-500">
+                                                        <span className="bg-gray-100 px-2 py-1 rounded">情境數: {history.scenarios?.length || 0}</span>
+                                                        <span className="bg-red-50 text-red-600 px-2 py-1 rounded border border-red-100">High Risk: {history.scenarios?.filter(s=>s.severity==='High'||s.severity==='Critical').length || 0}</span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                         </div>
+                                     )}
+                                 </div>
+                            </div>
+                        )}
+
+                        {/* TAB 2: INDICATORS (Playbook) */}
+                        {activeTab === 'indicators' && (
+                             <div className="flex-1 flex overflow-hidden">
+                                <div className="w-1/3 p-6 border-r border-gray-200 overflow-y-auto bg-slate-50">
+                                    <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Target size={18}/> 監控指標產生器</h4>
+                                    <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
+                                        <p className="text-xs text-gray-500 mb-3 leading-relaxed">此功能將根據您的環境，自動生成 Top 30 優先級最高的監控指標與實作建議。</p>
+                                        <label className="block text-xs font-bold text-gray-700 mb-2">補充環境資訊 (選填)</label>
+                                        <textarea className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 resize-none text-sm mb-3" placeholder="例如：Windows AD, Exchange, Fortigate..." value={systemInput} onChange={e=>setSystemInput(e.target.value)}/>
+                                        <button className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg font-bold shadow flex items-center justify-center gap-2" onClick={handleGeneratePlaybook} disabled={playbookLoading}>{playbookLoading ? <Loader2 className="animate-spin"/> : <ListChecks size={18}/>} 生成 Top 30 指標</button>
+                                    </div>
+                                    
+                                    {/* Playbook History Sidebar */}
+                                    <h5 className="font-bold text-gray-500 text-xs uppercase mb-3 px-1">最近紀錄</h5>
+                                    <div className="space-y-2">
+                                        {playbookHistory.map(h => (
+                                            <div key={h.id} onClick={()=>{setPlaybookResult(h.content); setSystemInput(h.input);}} className="p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-purple-300 transition-colors text-xs shadow-sm">
+                                                <div className="flex justify-between text-gray-400 mb-1"><span>{h.timestamp.split(' ')[0]}</span><button onClick={(e)=>handleDeleteHistory(e,h.id)} className="hover:text-red-500"><Trash size={12}/></button></div>
+                                                <div className="font-medium text-gray-700 truncate">{h.input || '自動生成'}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="w-2/3 p-8 overflow-y-auto bg-white">
+                                    {playbookResult ? (
+                                        <div className="max-w-4xl mx-auto">
+                                            <div className="flex justify-between items-center mb-6 border-b pb-4">
+                                                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><ListChecks className="text-purple-600"/> 生成結果</h3>
+                                                <div className="flex gap-2">
+                                                    <button onClick={()=>handleGenerateChart(getResultContent(playbookResult,'text'))} className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${resultViewMode==='chart'?'bg-purple-50 text-purple-700 border-purple-200':'hover:bg-gray-50'}`}><BarChart3 size={14}/> 視覺化</button>
+                                                    <button onClick={()=>setResultViewMode('text')} className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${resultViewMode==='text'?'bg-purple-50 text-purple-700 border-purple-200':'hover:bg-gray-50'}`}><ShieldCheck size={14}/> 風險指標</button>
+                                                    <button onClick={()=>setResultViewMode('guide')} className={`flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-lg border transition-colors ${resultViewMode==='guide'?'bg-purple-50 text-purple-700 border-purple-200':'hover:bg-gray-50'}`}><Wrench size={14}/> 實作指引</button>
+                                                    <button onClick={()=>handleExportTxt(playbookResult)} className="flex items-center gap-2 text-xs font-bold px-3 py-2 rounded-lg border hover:bg-gray-50"><Download size={14}/></button>
+                                                </div>
+                                            </div>
+
+                                            {resultViewMode === 'chart' && chartData ? (
+                                                <div className="space-y-6 animate-in fade-in">
+                                                    <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100">
+                                                        <h5 className="font-bold text-purple-900 mb-4 flex items-center gap-2"><LayoutDashboard size={16}/> 優先級分佈</h5>
+                                                        <div className="flex h-4 rounded-full overflow-hidden mb-4">
+                                                            {Object.entries(chartData.priority_stats||{}).map(([k,v],i)=><div key={k} style={{width:`${(v/Object.values(chartData.priority_stats).reduce((a,b)=>a+b,0))*100}%`}} className={`h-full ${['bg-red-500','bg-amber-500','bg-blue-500'][i%3]}`}></div>)}
+                                                        </div>
+                                                        <div className="flex gap-4">
+                                                            {Object.entries(chartData.priority_stats||{}).map(([k,v],i)=><div key={k} className="flex items-center gap-2 text-sm"><span className={`w-3 h-3 rounded-full ${['bg-red-500','bg-amber-500','bg-blue-500'][i%3]}`}></span><span className="font-medium text-slate-700">{k}: {v}</span></div>)}
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+                                                            <h5 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Database size={16}/> Top Data Sources</h5>
+                                                            {Object.entries(chartData.source_stats||{}).map(([k,v])=><div key={k} className="flex justify-between text-sm py-2 border-b last:border-0 border-gray-50"><span className="text-gray-600">{k}</span><span className="font-bold text-purple-600">{v}</span></div>)}
+                                                        </div>
+                                                        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+                                                            <h5 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><PieChart size={16}/> Risk Categories</h5>
+                                                            {Object.entries(chartData.category_stats||{}).map(([k,v])=><div key={k} className="flex justify-between text-sm py-2 border-b last:border-0 border-gray-50"><span className="text-gray-600">{k}</span><span className="font-bold text-indigo-600">{v}</span></div>)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="animate-in fade-in prose prose-slate max-w-none prose-sm">
+                                                    {renderMarkdown(getResultContent(playbookResult, resultViewMode))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="h-full flex flex-col items-center justify-center text-gray-300">
+                                            <ListChecks size={80} className="mb-4 opacity-50"/>
+                                            <p>請點擊左側生成按鈕</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 3: HISTORY DASHBOARD */}
+                        {activeTab === 'history' && (
+                            <div className="flex-1 overflow-y-auto bg-gray-50 p-8">
+                                <div className="max-w-7xl mx-auto space-y-8">
+                                    <div className="flex justify-between items-end">
+                                        <div>
+                                            <h2 className="text-2xl font-bold text-slate-800">歷史情境戰情看板</h2>
+                                            <p className="text-slate-500 text-sm mt-1">匯總所有歷史分析結果，即時掌握威脅分佈態勢</p>
+                                        </div>
+                                        <div className="bg-white px-4 py-2 rounded-lg border border-gray-200 shadow-sm text-sm font-bold text-slate-600">
+                                            總情境數: {Object.values(aggregatedHistory.byRisk).flat().length}
+                                        </div>
+                                    </div>
+
+                                    {/* Stats Cards */}
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        {[
+                                            { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: LucideIcons.AlertOctagon },
+                                            { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: LucideIcons.AlertTriangle },
+                                            { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: LucideIcons.Activity },
+                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: LucideIcons.Info }
+                                        ].map((stat, i) => (
+                                            <div key={i} className={`bg-white p-5 rounded-xl border-l-4 shadow-sm flex justify-between items-center border-${stat.color}-500`}>
+                                                <div>
+                                                    <p className={`text-xs font-bold uppercase text-${stat.color}-600 mb-1`}>{stat.label}</p>
+                                                    <p className="text-3xl font-bold text-slate-800">{stat.count}</p>
+                                                </div>
+                                                <stat.icon className={`text-${stat.color}-200`} size={32}/>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Detailed Grids */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                        {/* By Risk Column */}
+                                        <div className="lg:col-span-2 space-y-6">
+                                            <h4 className="font-bold text-slate-700 flex items-center gap-2"><LayoutGrid size={18}/> 依風險等級歸類 (By Risk)</h4>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                {['Critical', 'High'].map(level => (
+                                                    <div key={level} className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col h-[600px]">
+                                                        <div className={`p-4 border-b font-bold flex justify-between items-center ${level==='Critical'?'bg-rose-50 text-rose-800':'bg-red-50 text-red-800'}`}>
+                                                            {level} Priority <span className="bg-white px-2 py-0.5 rounded text-xs border shadow-sm">{aggregatedHistory.byRisk[level]?.length || 0}</span>
+                                                        </div>
+                                                        <div className="p-3 overflow-y-auto flex-1 bg-slate-50 space-y-3">
+                                                            {aggregatedHistory.byRisk[level]?.map((s, idx) => <ScenarioCard key={idx} scenario={s}/>)}
+                                                            {(!aggregatedHistory.byRisk[level]?.length) && <div className="text-center text-gray-400 text-xs mt-20">無資料</div>}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* By Category Column */}
+                                        <div className="space-y-6">
+                                            <h4 className="font-bold text-slate-700 flex items-center gap-2"><LayoutDashboard size={18}/> 依威脅類別歸類</h4>
+                                            <div className="space-y-4">
+                                                {Object.entries(aggregatedHistory.byCategory).map(([cat, items]) => (
+                                                    <div key={cat} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                                        <div className="p-3 bg-slate-100 border-b border-gray-200 font-bold text-slate-700 text-sm flex justify-between cursor-pointer hover:bg-slate-200 transition-colors">
+                                                            {cat} <span>{items.length}</span>
+                                                        </div>
+                                                        {items.length > 0 && (
+                                                            <div className="p-2 max-h-[300px] overflow-y-auto bg-slate-50 space-y-2">
+                                                                {items.map((s, idx) => <ScenarioCard key={idx} scenario={s}/>)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Manage Common Systems Modal (New) */}
+                    {manageSystemsOpen && (
+                        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-xl w-full max-w-lg h-[600px] flex flex-col shadow-2xl animate-in zoom-in-95">
+                                <div className="bg-slate-800 text-white p-4 flex justify-between items-center">
+                                <h3 className="font-bold">管理常見系統清單</h3>
+                                <button onClick={() => setManageSystemsOpen(false)}><X/></button>
+                                </div>
+                                <div className="p-4 border-b bg-gray-50">
+                                <h5 className="text-sm font-bold text-gray-700 mb-2">新增項目</h5>
+                                <div className="flex gap-2 mb-2">
+                                    <select className="p-2 border rounded text-sm w-1/3" value={newSystemCategory} onChange={e=>setNewSystemCategory(e.target.value)}>
+                                    {assetCategories.map(c => <option key={c} value={c}>{c.split(' ')[0]}</option>)}
+                                    </select>
+                                    <input className="p-2 border rounded text-sm flex-1" placeholder="系統名稱" value={newSystemName} onChange={e=>setNewSystemName(e.target.value)}/>
+                                </div>
+                                <button onClick={handleAddCommonSystem} className="w-full bg-indigo-600 text-white py-1.5 rounded text-sm font-bold hover:bg-indigo-700">新增至清單</button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                                {Object.entries(commonSystems).map(([cat, items]) => (
+                                    <div key={cat}>
+                                    <h5 className="text-xs font-bold text-gray-500 uppercase mb-1 bg-gray-100 p-1 rounded">{cat}</h5>
+                                    <div className="space-y-1 pl-2">
+                                        {items.map((item, idx) => (
+                                        <div key={idx} className="flex justify-between items-center text-sm group hover:bg-gray-50 p-1 rounded">
+                                            <span>{item}</span>
+                                            <button onClick={() => handleDeleteCommonSystem(cat, item)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100"><Trash size={14}/></button>
+                                        </div>
+                                        ))}
+                                    </div>
+                                    </div>
+                                ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(WarRoom));
+    </script>
+</body>
+</html>
