@@ -50,7 +50,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // --- Helper Components ---
+        // --- Helper Components & Functions ---
 
         const SafeText = ({ content }) => {
             if (content === null || content === undefined) return null;
@@ -106,7 +106,8 @@
                 } else {
                     if (tableRows.length > 0) { elements.push(flushTable(i)); tableRows = []; }
                     if (line.startsWith('###')) {
-                        elements.push(<h3 key={i} className="font-bold text-slate-800 mt-4 border-l-4 border-indigo-500 pl-2 text-lg">{line.replace(/#/g, '')}</h3>);
+                        const title = line.replace(/#/g, '');
+                        elements.push(<h3 key={i} className="font-bold text-slate-800 mt-4 border-l-4 border-indigo-500 pl-2 text-lg">{title}</h3>);
                     } else if (line.length > 0) {
                         elements.push(<p key={i} className="text-sm text-slate-600 mb-1 leading-relaxed">{line}</p>);
                     }
@@ -123,7 +124,11 @@
             else if(scenario.severity==='High') severityClass = 'bg-red-50 text-red-600 border-red-200';
             else if(scenario.severity==='Medium') severityClass = 'bg-yellow-50 text-yellow-600 border-yellow-200';
             
-            const logs = Array.isArray(scenario.logs_required) ? scenario.logs_required : typeof scenario.logs_required === 'string' ? [scenario.logs_required] : [];
+            const logs = Array.isArray(scenario.logs_required) 
+                ? scenario.logs_required 
+                : typeof scenario.logs_required === 'string' 
+                    ? [scenario.logs_required] 
+                    : [];
 
             return (
                 <div className="border border-slate-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow mb-3 text-sm group">
@@ -157,12 +162,23 @@
                 Briefcase, Server, ShieldCheck, Target, Activity, Loader2, BrainCircuit, 
                 Cloud, CloudOff, Check, Plus, Trash, ArrowUp, ArrowDown, Settings, 
                 ListChecks, BarChart3, Wrench, Download, LayoutGrid, ScrollText, Wand2,
-                LayoutDashboard, GanttChartSquare 
+                LayoutDashboard, GanttChartSquare, History, AlertOctagon, AlertTriangle, Info 
             } = LucideIcons;
 
-            const apiKey = "AIzaSyAmRqjLtOh7hR92aH7xCuKuK_Z9phGzjW8";
+            // --- API Key Protection ---
+            // Key has been Base64 encoded to prevent simple text scraping.
+            // Real protection MUST be done in Google Cloud Console > Credentials > Restrict Key > HTTP Referrers.
+            const getDecodedKey = () => {
+                try {
+                    return atob("QUl6YVN5QklMR2xkeUJDVXFZWl9BeTg3ZjQ5S25sQnM0LWR2eDhJ");
+                } catch (e) {
+                    console.error("Key decoding failed");
+                    return "";
+                }
+            };
+            const apiKey = getDecodedKey();
             
-            // Firebase Config Logic
+            // Firebase Config
             const getFirebaseConfig = () => {
                 if (typeof __firebase_config !== 'undefined') {
                     return JSON.parse(__firebase_config);
@@ -187,7 +203,7 @@
             // --- States ---
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('connecting');
-            const [activeTab, setActiveTab] = useState('assets'); // 'assets', 'indicators', 'history'
+            const [activeTab, setActiveTab] = useState('assets'); 
 
             // Data States
             const [assetList, setAssetList] = useState([
@@ -211,20 +227,18 @@
             const [resultViewMode, setResultViewMode] = useState('text');
 
             const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
-            const [manageSystemsOpen, setManageSystemsOpen] = useState(false);
             
             const [analysisType, setAnalysisType] = useState('ALL');
 
-            const [commonSystems, setCommonSystems] = useState({
+            // Static Common Systems (Removed management capability)
+            const commonSystems = {
                 "網路與資安設備": ["Palo Alto Firewall", "CheckPoint Firewall", "Cisco Switch", "Cisco ASA VPN"],
                 "端點防護 (EDR)": ["CrowdStrike", "TrendMicro Apex One", "TeamT5 EDR", "WorkspaceOne MDM"],
                 "身分驗證與作業系統": ["WindowsAD", "WindowsServer", "Linux RHEL"],
                 "應用系統 (Applications)": ["SAP", "MES", "HRM", "PLM", "ELN", "GEM", "RMS"],
                 "資料庫 (Database)": ["Oracle", "MSSQL"],
                 "核心虛擬架構 (Infra)": ["Esxi Host", "Pure Storage", "RDP 遠端跳板主機"]
-            });
-            const [newSystemCategory, setNewSystemCategory] = useState("網路與資安設備");
-            const [newSystemName, setNewSystemName] = useState("");
+            };
 
             const assetCategories = Object.keys(commonSystems);
             const analysisOptions = [
@@ -253,6 +267,7 @@
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
                     setUser(u);
                     if(u) setSyncStatus('synced');
+                    else setSyncStatus('connecting');
                 });
                 return () => unsubscribe();
             }, []);
@@ -315,12 +330,6 @@
             const savePlaybookToDB = (newHistory) => saveToDB('playbookHistory', newHistory);
 
             // --- Handlers ---
-            const handleAddCommonSystem = () => {
-                if (!newSystemName.trim()) return;
-                setCommonSystems(prev => ({ ...prev, [newSystemCategory]: [...(prev[newSystemCategory] || []), newSystemName.trim()] }));
-                setNewSystemName("");
-            };
-            const handleDeleteCommonSystem = (category, name) => { setCommonSystems(prev => ({ ...prev, [category]: prev[category].filter(item => item !== name) })); };
             const handleAddAssetRow = () => { const newId = Math.max(0, ...assetList.map(a => a.id)) + 1; const newList = [...assetList, { id: newId, category: "", name: "", note: "" }]; setAssetList(newList); saveAssetsToDB(newList); };
             const handleDeleteAssetRow = (id) => { const newList = assetList.filter(a => a.id !== id); setAssetList(newList); saveAssetsToDB(newList); };
             const handleUpdateAssetRow = (id, field, value) => { const newList = assetList.map(a => a.id === id ? { ...a, [field]: value } : a); setAssetList(newList); saveAssetsToDB(newList); };
@@ -400,13 +409,12 @@
                     record.scenarios?.forEach(scenario => {
                         if (stats.byRisk[scenario.severity]) { stats.byRisk[scenario.severity].push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); } 
                         else if (scenario.severity === 'Critical') { stats.byRisk.Critical.push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); }
-                        
-                        let cat = scenario.category;
+                        let cat = String(scenario.category || "");
                         if (!stats.byCategory[cat]) { 
-                            if (cat?.includes('身分') || cat?.includes('帳號')) cat = '身分與存取威脅'; 
-                            else if (cat?.includes('網路') || cat?.includes('連線')) cat = '網路邊界與異常連線'; 
-                            else if (cat?.includes('端點') || cat?.includes('惡意')) cat = '端點行為與惡意程式'; 
-                            else if (cat?.includes('系統') || cat?.includes('規避')) cat = '防禦規避與系統健康'; 
+                            if (cat.includes('身分') || cat.includes('存取')) cat = '身分與存取威脅'; 
+                            else if (cat.includes('網路') || cat.includes('連線')) cat = '網路邊界與異常連線'; 
+                            else if (cat.includes('端點') || cat.includes('惡意')) cat = '端點行為與惡意程式'; 
+                            else if (cat.includes('系統') || cat.includes('規避')) cat = '防禦規避與系統健康'; 
                             else cat = '防禦規避與系統健康'; 
                         }
                         if (stats.byCategory[cat]) { stats.byCategory[cat].push({ ...scenario, source_date: record.timestamp, source_type: record.analysis_type }); }
@@ -447,6 +455,8 @@
                 setPlaybookHistory(newHistory);
                 savePlaybookToDB(newHistory); 
             };
+            
+            const handleOpenImplementationGuide = () => { setActiveTab('indicators'); if (playbookResult) setResultViewMode('guide'); else if (playbookHistory.length > 0) { const latest = playbookHistory[0]; setSystemInput(latest.input); setPlaybookResult(latest.content); setResultViewMode('guide'); } };
 
             return (
                 <div className="h-full flex flex-col bg-slate-50 font-sans">
@@ -489,7 +499,6 @@
                                     <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm mb-4">
                                         <div className="flex justify-between items-center mb-2">
                                             <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">快速加入</label>
-                                            <button onClick={()=>setManageSystemsOpen(true)} className="text-xs text-indigo-500 hover:underline flex items-center gap-1"><Settings size={10}/> 管理清單</button>
                                         </div>
                                         <div className="flex gap-2 mb-3">
                                             <select className="flex-1 p-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-gray-50" onChange={handleQuickAddAsset}>
@@ -498,13 +507,22 @@
                                                     <optgroup key={cat} label={cat}>{items.map(s=><option key={s} value={s}>{s}</option>)}</optgroup>
                                                 ))}
                                             </select>
-                                            <button onClick={handleAiSuggestAssets} disabled={aiSuggestingAssets} className="px-3 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg shadow hover:shadow-md transition-all flex items-center gap-1 disabled:opacity-50 text-xs font-bold whitespace-nowrap">
-                                                {aiSuggestingAssets ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} AI 推薦
+                                            <button 
+                                              onClick={handleAiSuggestAssets} 
+                                              disabled={aiSuggestingAssets}
+                                              className="px-3 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg shadow hover:shadow-md transition-all flex items-center gap-1 disabled:opacity-50 text-xs font-bold whitespace-nowrap"
+                                              title="由 AI 根據標準架構自動推薦核心資產"
+                                            >
+                                              {aiSuggestingAssets ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} AI 推薦
                                             </button>
                                         </div>
                                         <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">分析維度 (Focus)</label>
-                                        <select className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-indigo-50 text-indigo-900 font-medium" value={analysisType} onChange={(e)=>setAnalysisType(e.target.value)}>
-                                            {analysisOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+                                        <select 
+                                          className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-indigo-50 text-indigo-900 font-medium" 
+                                          value={analysisType}
+                                          onChange={(e)=>setAnalysisType(e.target.value)}
+                                        >
+                                           {analysisOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
                                         </select>
                                     </div>
 
@@ -524,7 +542,7 @@
                                                         <td className="p-2">
                                                             <select className="w-full bg-transparent outline-none text-xs text-gray-600" value={asset.category} onChange={(e)=>handleUpdateAssetRow(asset.id,'category',e.target.value)}>
                                                                 <option value="" disabled>分類...</option>
-                                                                {assetCategories.map(c=><option key={c} value={c}>{c}</option>)}
+                                                                {assetCategories.map(c=><option key={c} value={c}>{c.split(' ')[0]}</option>)}
                                                             </select>
                                                         </td>
                                                         <td className="p-2">
@@ -780,43 +798,6 @@
                             </div>
                         )}
                     </div>
-
-                    {/* Manage Common Systems Modal (New) */}
-                    {manageSystemsOpen && (
-                        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                            <div className="bg-white rounded-xl w-full max-w-lg h-[600px] flex flex-col shadow-2xl animate-in zoom-in-95">
-                                <div className="bg-slate-800 text-white p-4 flex justify-between items-center">
-                                <h3 className="font-bold">管理常見系統清單</h3>
-                                <button onClick={() => setManageSystemsOpen(false)}><X/></button>
-                                </div>
-                                <div className="p-4 border-b bg-gray-50">
-                                <h5 className="text-sm font-bold text-gray-700 mb-2">新增項目</h5>
-                                <div className="flex gap-2 mb-2">
-                                    <select className="p-2 border rounded text-sm w-1/3" value={newSystemCategory} onChange={e=>setNewSystemCategory(e.target.value)}>
-                                    {assetCategories.map(c => <option key={c} value={c}>{c.split(' ')[0]}</option>)}
-                                    </select>
-                                    <input className="p-2 border rounded text-sm flex-1" placeholder="系統名稱" value={newSystemName} onChange={e=>setNewSystemName(e.target.value)}/>
-                                </div>
-                                <button onClick={handleAddCommonSystem} className="w-full bg-indigo-600 text-white py-1.5 rounded text-sm font-bold hover:bg-indigo-700">新增至清單</button>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                                {Object.entries(commonSystems).map(([cat, items]) => (
-                                    <div key={cat}>
-                                    <h5 className="text-xs font-bold text-gray-500 uppercase mb-1 bg-gray-100 p-1 rounded">{cat}</h5>
-                                    <div className="space-y-1 pl-2">
-                                        {items.map((item, idx) => (
-                                        <div key={idx} className="flex justify-between items-center text-sm group hover:bg-gray-50 p-1 rounded">
-                                            <span>{item}</span>
-                                            <button onClick={() => handleDeleteCommonSystem(cat, item)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100"><Trash size={14}/></button>
-                                        </div>
-                                        ))}
-                                    </div>
-                                    </div>
-                                ))}
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             );
         };
