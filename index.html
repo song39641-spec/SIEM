@@ -59,16 +59,15 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // --- Helper Components & Functions (Defined OUTSIDE ProjectSchedule) ---
+        // --- Helper Components & Functions ---
 
-        // SafeText Component: The Shield against Error #130
+        // SafeText Component
         const SafeText = ({ content }) => {
             if (content === null || content === undefined) return null;
             try {
                 if (typeof content === 'string' || typeof content === 'number') return <>{content}</>;
                 if (typeof content === 'boolean') return <>{String(content)}</>;
                 if (Array.isArray(content)) {
-                    // Handle array of strings or objects
                     return <>{content.map(c => (typeof c === 'object' ? JSON.stringify(c) : String(c))).join(', ')}</>;
                 }
                 if (typeof content === 'object') {
@@ -196,13 +195,12 @@
                 Fingerprint, Network, Laptop, Lock, Save 
             } = LucideIcons;
 
-            // --- API Key Protection (Obfuscation) ---
-            // 透過拆分字串，避免被靜態程式碼掃描器直接識別為 API Key
+            // --- API Key Protection ---
             const _p1 = "AIzaSyBILGldyB";
             const _p2 = "CUqYZ_Ay87f49K";
             const _p3 = "nlBs4-dvx8I";
             const apiKey = _p1 + _p2 + _p3;
-
+            
             // Firebase Config
             const getFirebaseConfig = () => {
                 if (typeof __firebase_config !== 'undefined') {
@@ -232,6 +230,7 @@
             const [lastSaved, setLastSaved] = useState(null);
             const [dbError, setDbError] = useState('');
             const [toast, setToast] = useState(null);
+            const [showRulesModal, setShowRulesModal] = useState(false);
 
             // Data States
             const [assetList, setAssetList] = useState([
@@ -255,7 +254,6 @@
             const [resultViewMode, setResultViewMode] = useState('text');
 
             const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
-            
             const [analysisType, setAnalysisType] = useState('ALL');
 
             // Constant Common Systems Data
@@ -307,19 +305,18 @@
                 setSyncStatus('connecting');
                 
                 // Sync Assets
-                const assetsQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'assets');
+                const assetsQuery = doc(db, 'artifacts', appId, 'shared_data', 'assets');
                 const unsubAssets = onSnapshot(assetsQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
                         if (data.items && Array.isArray(data.items)) setAssetList(data.items);
                     }
                 }, (err) => {
-                    console.error("Sync Assets Error:", err);
-                    setDbError("Assets Sync: " + err.message);
+                    handleSyncError(err);
                 });
 
                 // Sync Threat History
-                const historyQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'threatHistory');
+                const historyQuery = doc(db, 'artifacts', appId, 'shared_data', 'threatHistory');
                 const unsubHistory = onSnapshot(historyQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -331,11 +328,11 @@
                         }
                     }
                 }, (err) => {
-                     // Ignored
+                    handleSyncError(err);
                 });
 
                 // Sync Playbook History
-                const playbookQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'playbookHistory');
+                const playbookQuery = doc(db, 'artifacts', appId, 'shared_data', 'playbookHistory');
                 const unsubPlaybook = onSnapshot(playbookQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -345,11 +342,21 @@
                     }
                      setSyncStatus('synced');
                 }, (err) => {
-                    console.error("Sync Playbook Error:", err);
+                    handleSyncError(err);
                 });
 
                 return () => { unsubAssets(); unsubHistory(); unsubPlaybook(); };
             }, [user]);
+
+            const handleSyncError = (err) => {
+                console.error("Sync Error:", err);
+                setDbError(err.message);
+                setSyncStatus('error');
+                // Detect permissions error
+                if (err.code === 'permission-denied' || err.message.includes('permission')) {
+                    setShowRulesModal(true);
+                }
+            };
 
             const showToast = (msg, type = 'success') => {
                 setToast({ message: msg, type });
@@ -357,10 +364,13 @@
             };
 
             const saveToDB = async (collectionName, dataValue) => {
-                if (!user) return;
+                if (!user) {
+                    setDbError("尚未登入，無法寫入");
+                    return;
+                }
                 setSyncStatus('connecting');
                 try {
-                    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'data', collectionName), { items: dataValue });
+                    await setDoc(doc(db, 'artifacts', appId, 'shared_data', collectionName), { items: dataValue });
                     setSyncStatus('synced');
                     setLastSaved(new Date().toLocaleTimeString());
                     setDbError(''); 
@@ -369,7 +379,10 @@
                     console.error("Save error:", e);
                     setSyncStatus('error');
                     setDbError(e.message);
-                    showToast('儲存失敗', 'error');
+                    showToast('儲存失敗: ' + e.message, 'error');
+                    if (e.code === 'permission-denied' || e.message.includes('permission')) {
+                        setShowRulesModal(true);
+                    }
                 }
             };
 
@@ -400,21 +413,18 @@
 
             const handleAiSuggestAssets = async () => {
                 setAiSuggestingAssets(true);
+                // Clear existing first
                 setAssetList([]);
+                
                 const categoriesStr = JSON.stringify(commonSystems);
                 const prompt = `資深 IT 架構師。從常見系統清單挑選 6-10 個 SIEM 關鍵資產。\n${categoriesStr}\nJSON Array: [{ "category", "name", "note" }]`;
-                try { 
-                    const rawText = await fetchGeminiResponse(prompt); 
-                    const jsonStartIndex = rawText.indexOf('['); const jsonEndIndex = rawText.lastIndexOf(']'); 
-                    if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { 
-                        const suggestions = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); 
-                        const startId = 1;
-                        const newAssets = suggestions.map((s, i) => ({ id: startId + i, category: s.category, name: s.name, note: s.note })); 
-                        setAssetList(newAssets); 
-                        saveAssetsToDB(newAssets); 
-                        showToast('AI 推薦資產已套用');
-                    } 
-                } catch (e) { showToast(e.message, 'error'); } finally { setAiSuggestingAssets(false); }
+                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('['); const jsonEndIndex = rawText.lastIndexOf(']'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const suggestions = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); 
+                    const startId = 1;
+                    const newAssets = suggestions.map((s, i) => ({ id: startId + i, category: s.category, name: s.name, note: s.note })); 
+                    setAssetList(newAssets); 
+                    saveAssetsToDB(newAssets); 
+                    showToast('AI 推薦資產已套用');
+                } } catch (e) { console.error(e); showToast('AI 發生錯誤', 'error'); } finally { setAiSuggestingAssets(false); }
             };
 
             const handleGenerateThreatAnalysis = async () => {
@@ -535,8 +545,12 @@
                         </div>
                         <div className="flex items-center gap-4">
                              {syncStatus === 'connecting' && <span className="text-xs text-yellow-400 animate-pulse flex items-center gap-1 bg-yellow-400/10 px-2 py-1 rounded-full"><Cloud size={12}/> 連線中...</span>}
-                             {syncStatus === 'synced' && <span className="text-xs text-green-400 flex items-center gap-1 bg-green-400/10 px-2 py-1 rounded-full"><Check size={12}/> 已同步</span>}
-                             {syncStatus === 'error' && <span className="text-xs text-red-400 flex items-center gap-1 bg-red-400/10 px-2 py-1 rounded-full" title={dbError}><CloudOff size={12}/> {dbError ? '錯誤' : '離線'}</span>}
+                             {syncStatus === 'synced' && <span className="text-xs text-green-400 flex items-center gap-1 bg-green-400/10 px-2 py-1 rounded-full"><Check size={12}/> 雲端共用中</span>}
+                             {syncStatus === 'error' && (
+                                <button onClick={() => setShowRulesModal(true)} className="text-xs text-red-400 flex items-center gap-1 bg-red-400/10 px-2 py-1 rounded-full hover:bg-red-400/20" title={dbError}>
+                                    <CloudOff size={12}/> {dbError.includes('permission') ? '權限錯誤 (點我修復)' : '離線'}
+                                </button>
+                             )}
                         </div>
                     </header>
 
@@ -555,7 +569,7 @@
                                 {/* Left: Asset Management */}
                                 <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col p-6 overflow-hidden">
                                     <div className="flex justify-between items-center mb-4">
-                                        <h3 className="font-bold text-gray-700 flex items-center gap-2"><Server className="text-indigo-500" size={18}/> 資產清單 (Inventory)</h3>
+                                        <h3 className="font-bold text-gray-700 flex items-center gap-2"><Server className="text-indigo-500" size={18}/> 資產清單 (Shared Inventory)</h3>
                                         <div className="flex gap-2">
                                            <button onClick={() => saveAssetsToDB(assetList)} className="text-xs bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded shadow-sm flex items-center gap-1"><Save size={12}/> 儲存</button>
                                            <button onClick={handleAddAssetRow} className="text-xs bg-white border hover:bg-gray-50 text-gray-600 px-2 py-1 rounded shadow-sm flex items-center gap-1"><Plus size={12}/> 新增列</button>
@@ -807,10 +821,10 @@
                                     {/* Stats Cards */}
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                         {[
-                                            { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: LucideIcons.AlertOctagon },
-                                            { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: LucideIcons.AlertTriangle },
-                                            { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: LucideIcons.Activity },
-                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: LucideIcons.Info }
+                                            { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: AlertOctagon },
+                                            { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: AlertTriangle },
+                                            { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: Activity },
+                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: Info }
                                         ].map((stat, i) => (
                                             <div key={i} className={`bg-white p-5 rounded-xl border-l-4 shadow-sm flex justify-between items-center border-${stat.color}-500`}>
                                                 <div>
@@ -865,6 +879,32 @@
                             </div>
                         )}
                     </div>
+
+                     {/* Help Modal for Permission Error */}
+                     {showRulesModal && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl p-6 relative">
+                                <button onClick={() => setShowRulesModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button>
+                                <h3 className="text-lg font-bold text-red-600 mb-2 flex items-center gap-2"><AlertTriangle/> 資料庫權限不足</h3>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    為了讓 GitHub Pages 上的戰情室能共用資料，請到 Firebase Console 修改 <strong>Firestore Database Rules</strong>：
+                                </p>
+                                <div className="bg-slate-900 text-gray-200 p-4 rounded-lg text-xs font-mono mb-4 overflow-x-auto">
+                                    <pre>{`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}`}</pre>
+                                </div>
+                                <div className="text-right">
+                                    <a href="https://console.firebase.google.com/" target="_blank" className="text-indigo-600 text-sm font-bold hover:underline">前往 Firebase Console &rarr;</a>
+                                </div>
+                            </div>
+                        </div>
+                     )}
 
                      {/* Toast Notification */}
                      {toast && (
