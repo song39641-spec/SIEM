@@ -18,6 +18,15 @@
           extend: {
             colors: {
               slate: { 850: '#1e293b' }
+            },
+            animation: {
+                'fade-in-up': 'fadeInUp 0.3s ease-out forwards'
+            },
+            keyframes: {
+                fadeInUp: {
+                    '0%': { opacity: '0', transform: 'translateY(10px)' },
+                    '100%': { opacity: '1', transform: 'translateY(0)' },
+                }
             }
           }
         }
@@ -87,12 +96,12 @@
                 
                 return (
                     <div key={`table-${idx}`} className="overflow-x-auto my-4 border border-gray-200 rounded-lg shadow-sm">
-                        <table className="min-w-full divide-y divide-gray-200">
+                        <table className="min-w-full divide-y divide-gray-200 text-sm">
                             <thead className="bg-slate-50">
-                                <tr>{headers.map((h, i) => <th key={i} className="px-4 py-2 text-left text-xs font-bold text-slate-700 border-r">{h}</th>)}</tr>
+                                <tr>{headers.map((h, i) => <th key={i} className="px-4 py-2 text-left text-xs font-bold text-slate-700 border-r last:border-r-0 whitespace-nowrap">{h}</th>)}</tr>
                             </thead>
                             <tbody className="bg-white divide-y">
-                                {bodyRows.map((r, i) => <tr key={i} className="hover:bg-slate-50">{parseRow(r).map((c, j) => <td key={j} className="px-4 py-2 text-xs border-r">{c}</td>)}</tr>)}
+                                {bodyRows.map((r, i) => <tr key={i} className="hover:bg-slate-50">{parseRow(r).map((c, j) => <td key={j} className="px-4 py-2 border-r last:border-r-0">{c}</td>)}</tr>)}
                             </tbody>
                         </table>
                     </div>
@@ -162,21 +171,21 @@
                 Briefcase, Server, ShieldCheck, Target, Activity, Loader2, BrainCircuit, 
                 Cloud, CloudOff, Check, Plus, Trash, ArrowUp, ArrowDown, Settings, 
                 ListChecks, BarChart3, Wrench, Download, LayoutGrid, ScrollText, Wand2,
-                LayoutDashboard, GanttChartSquare, History, AlertOctagon, AlertTriangle, Info 
+                LayoutDashboard, GanttChartSquare, History, AlertOctagon, AlertTriangle, Info,
+                FileText, CheckCircle, Rocket, Mail, MessageCircleQuestion, FilePenLine, FileCode, FileSpreadsheet,
+                Fingerprint, Network, Laptop, Lock, Save, KeyRound
             } = LucideIcons;
 
-            // --- API Key Protection ---
-            // Key has been Base64 encoded to prevent simple text scraping.
-            // Real protection MUST be done in Google Cloud Console > Credentials > Restrict Key > HTTP Referrers.
-            const getDecodedKey = () => {
-                try {
-                    return atob("QUl6YVN5QklMR2xkeUJDVXFZWl9BeTg3ZjQ5S25sQnM0LWR2eDhJ");
-                } catch (e) {
-                    console.error("Key decoding failed");
-                    return "";
-                }
+            // --- API Key Management ---
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || "");
+            const [showKeyModal, setShowKeyModal] = useState(false);
+
+            const handleSaveKey = (newKey) => {
+                setApiKey(newKey);
+                localStorage.setItem('gemini_api_key', newKey);
+                setShowKeyModal(false);
+                showToast("API Key 已儲存", "success");
             };
-            const apiKey = getDecodedKey();
             
             // Firebase Config
             const getFirebaseConfig = () => {
@@ -194,7 +203,7 @@
                     };
                 }
             };
-
+            
             const app = initializeApp(getFirebaseConfig());
             const auth = getAuth(app);
             const db = getFirestore(app);
@@ -204,6 +213,9 @@
             const [user, setUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('connecting');
             const [activeTab, setActiveTab] = useState('assets'); 
+            const [lastSaved, setLastSaved] = useState(null);
+            const [dbError, setDbError] = useState('');
+            const [toast, setToast] = useState(null);
 
             // Data States
             const [assetList, setAssetList] = useState([
@@ -227,10 +239,9 @@
             const [resultViewMode, setResultViewMode] = useState('text');
 
             const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
-            
             const [analysisType, setAnalysisType] = useState('ALL');
 
-            // Static Common Systems (Removed management capability)
+            // Constant Common Systems Data
             const commonSystems = {
                 "網路與資安設備": ["Palo Alto Firewall", "CheckPoint Firewall", "Cisco Switch", "Cisco ASA VPN"],
                 "端點防護 (EDR)": ["CrowdStrike", "TrendMicro Apex One", "TeamT5 EDR", "WorkspaceOne MDM"],
@@ -239,7 +250,7 @@
                 "資料庫 (Database)": ["Oracle", "MSSQL"],
                 "核心虛擬架構 (Infra)": ["Esxi Host", "Pure Storage", "RDP 遠端跳板主機"]
             };
-
+            
             const assetCategories = Object.keys(commonSystems);
             const analysisOptions = [
                 { id: 'ALL', label: '綜合交叉關聯分析' },
@@ -261,6 +272,7 @@
                     } catch (err) {
                         console.error("Auth failed:", err);
                         setSyncStatus('error');
+                        setDbError(err.message);
                     }
                 };
                 initAuth();
@@ -272,10 +284,11 @@
                 return () => unsubscribe();
             }, []);
 
+            // Data Sync
             useEffect(() => {
                 if (!user) return;
                 setSyncStatus('connecting');
-
+                
                 // Sync Assets
                 const assetsQuery = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'assets');
                 const unsubAssets = onSnapshot(assetsQuery, (docSnapshot) => {
@@ -283,6 +296,9 @@
                         const data = docSnapshot.data();
                         if (data.items && Array.isArray(data.items)) setAssetList(data.items);
                     }
+                }, (err) => {
+                    console.error("Sync Assets Error:", err);
+                    setDbError("Assets Sync: " + err.message);
                 });
 
                 // Sync Threat History
@@ -309,10 +325,17 @@
                         }
                     }
                      setSyncStatus('synced');
-                }, () => setSyncStatus('error'));
+                }, (err) => {
+                    console.error("Sync Playbook Error:", err);
+                });
 
                 return () => { unsubAssets(); unsubHistory(); unsubPlaybook(); };
             }, [user]);
+
+            const showToast = (msg, type = 'success') => {
+                setToast({ message: msg, type });
+                setTimeout(() => setToast(null), 3000);
+            };
 
             const saveToDB = async (collectionName, dataValue) => {
                 if (!user) return;
@@ -320,8 +343,13 @@
                 try {
                     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'data', collectionName), { items: dataValue });
                     setSyncStatus('synced');
+                    setLastSaved(new Date().toLocaleTimeString());
+                    setDbError(''); 
+                    if (collectionName !== 'assets') showToast('儲存成功');
                 } catch (e) {
                     setSyncStatus('error');
+                    setDbError(e.message);
+                    showToast('儲存失敗', 'error');
                 }
             };
 
@@ -338,6 +366,11 @@
             const getResultContent = (txt, mode) => { if(!txt) return ''; const p=txt.split('---SPLIT---'); return (mode==='guide' && p[1]) ? p[1].trim() : p[0].trim(); };
 
             const fetchGeminiResponse = async (prompt) => {
+                if (!apiKey) {
+                    setShowKeyModal(true);
+                    throw new Error("請先設定 API Key");
+                }
+                
                 try {
                 const payload = { contents: [{ parts: [{ text: prompt }] }] };
                 const response = await fetch(
@@ -347,14 +380,30 @@
                 const data = await response.json();
                 if (data.error) throw new Error(data.error.message);
                 return data.candidates?.[0]?.content?.parts?.[0]?.text || "無法取得回應。";
-                } catch (error) { console.error("Gemini API Error:", error); throw error; }
+                } catch (error) { 
+                    console.error("Gemini API Error:", error); 
+                    if (error.message.includes('key')) setShowKeyModal(true);
+                    throw error; 
+                }
             };
 
             const handleAiSuggestAssets = async () => {
                 setAiSuggestingAssets(true);
+                setAssetList([]);
                 const categoriesStr = JSON.stringify(commonSystems);
                 const prompt = `資深 IT 架構師。從常見系統清單挑選 6-10 個 SIEM 關鍵資產。\n${categoriesStr}\nJSON Array: [{ "category", "name", "note" }]`;
-                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('['); const jsonEndIndex = rawText.lastIndexOf(']'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const suggestions = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); const startId = Math.max(0, ...assetList.map(a => a.id)) + 1; const newAssets = suggestions.map((s, i) => ({ id: startId + i, category: s.category, name: s.name, note: s.note })); const mergedList = [...assetList, ...newAssets]; setAssetList(mergedList); saveAssetsToDB(mergedList); } } catch (e) { console.error(e); } finally { setAiSuggestingAssets(false); }
+                try { 
+                    const rawText = await fetchGeminiResponse(prompt); 
+                    const jsonStartIndex = rawText.indexOf('['); const jsonEndIndex = rawText.lastIndexOf(']'); 
+                    if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { 
+                        const suggestions = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); 
+                        const startId = 1;
+                        const newAssets = suggestions.map((s, i) => ({ id: startId + i, category: s.category, name: s.name, note: s.note })); 
+                        setAssetList(newAssets); 
+                        saveAssetsToDB(newAssets); 
+                        showToast('AI 推薦資產已套用');
+                    } 
+                } catch (e) { showToast(e.message, 'error'); } finally { setAiSuggestingAssets(false); }
             };
 
             const handleGenerateThreatAnalysis = async () => {
@@ -400,7 +449,7 @@
                 JSON 內容請用繁體中文。
                 `;
 
-                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('{'); const jsonEndIndex = rawText.lastIndexOf('}'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const result = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); const finalResult = { ...result, timestamp: new Date().toLocaleString() }; setThreatData(finalResult); const newHistory = [finalResult, ...threatHistory]; setThreatHistory(newHistory); saveHistoryToDB(newHistory); } else { throw new Error("無法解析回應資料"); } } catch (e) { console.error(e); setThreatData({ analysis_type: "錯誤", scenarios:[{title:"解析失敗", severity:"Low", related_assets:[], logs_required:["請重試"], correlation_logic:"請檢查網路或重試"}], admin_log_guide: [] }); } finally { setThreatLoading(false); }
+                try { const rawText = await fetchGeminiResponse(prompt); const jsonStartIndex = rawText.indexOf('{'); const jsonEndIndex = rawText.lastIndexOf('}'); if (jsonStartIndex !== -1 && jsonEndIndex !== -1) { const result = JSON.parse(rawText.substring(jsonStartIndex, jsonEndIndex + 1)); const finalResult = { ...result, timestamp: new Date().toLocaleString() }; setThreatData(finalResult); const newHistory = [finalResult, ...threatHistory]; setThreatHistory(newHistory); saveHistoryToDB(newHistory); } else { throw new Error("無法解析回應資料"); } } catch (e) { showToast(e.message, 'error'); } finally { setThreatLoading(false); }
             };
 
             const aggregatedHistory = useMemo(() => {
@@ -472,7 +521,8 @@
                         <div className="flex items-center gap-4">
                              {syncStatus === 'connecting' && <span className="text-xs text-yellow-400 animate-pulse flex items-center gap-1 bg-yellow-400/10 px-2 py-1 rounded-full"><Cloud size={12}/> 連線中...</span>}
                              {syncStatus === 'synced' && <span className="text-xs text-green-400 flex items-center gap-1 bg-green-400/10 px-2 py-1 rounded-full"><Check size={12}/> 已同步</span>}
-                             {syncStatus === 'error' && <span className="text-xs text-red-400 flex items-center gap-1 bg-red-400/10 px-2 py-1 rounded-full"><CloudOff size={12}/> 離線</span>}
+                             {syncStatus === 'error' && <span className="text-xs text-red-400 flex items-center gap-1 bg-red-400/10 px-2 py-1 rounded-full" title={dbError}><CloudOff size={12}/> {dbError ? '錯誤' : '離線'}</span>}
+                             <button onClick={() => setShowKeyModal(true)} className="flex items-center gap-1 text-xs text-slate-300 hover:text-white transition-colors"><KeyRound size={14}/> 設定 Key</button>
                         </div>
                     </header>
 
@@ -492,7 +542,10 @@
                                 <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col p-6 overflow-hidden">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-bold text-gray-700 flex items-center gap-2"><Server className="text-indigo-500" size={18}/> 資產清單 (Inventory)</h3>
-                                        <button onClick={handleAddAssetRow} className="text-xs bg-white border hover:bg-gray-50 text-gray-600 px-2 py-1 rounded shadow-sm flex items-center gap-1"><Plus size={12}/> 新增列</button>
+                                        <div className="flex gap-2">
+                                           <button onClick={() => saveAssetsToDB(assetList)} className="text-xs bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded shadow-sm flex items-center gap-1"><Save size={12}/> 儲存</button>
+                                           <button onClick={handleAddAssetRow} className="text-xs bg-white border hover:bg-gray-50 text-gray-600 px-2 py-1 rounded shadow-sm flex items-center gap-1"><Plus size={12}/> 新增列</button>
+                                        </div>
                                     </div>
 
                                     {/* Quick Add Section */}
@@ -511,7 +564,7 @@
                                               onClick={handleAiSuggestAssets} 
                                               disabled={aiSuggestingAssets}
                                               className="px-3 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg shadow hover:shadow-md transition-all flex items-center gap-1 disabled:opacity-50 text-xs font-bold whitespace-nowrap"
-                                              title="由 AI 根據標準架構自動推薦核心資產"
+                                              title="由 AI 根據標準架構自動推薦核心資產 (會覆蓋現有清單)"
                                             >
                                               {aiSuggestingAssets ? <Loader2 size={14} className="animate-spin"/> : <Wand2 size={14}/>} AI 推薦
                                             </button>
@@ -531,7 +584,7 @@
                                         <table className="w-full text-left border-collapse">
                                             <thead className="bg-gray-50 sticky top-0 z-10 text-xs text-gray-500 uppercase">
                                                 <tr>
-                                                    <th className="p-3 border-b">分類</th>
+                                                    <th className="p-3 border-b w-[30%]">分類</th>
                                                     <th className="p-3 border-b">名稱</th>
                                                     <th className="p-3 border-b w-10"></th>
                                                 </tr>
@@ -542,7 +595,7 @@
                                                         <td className="p-2">
                                                             <select className="w-full bg-transparent outline-none text-xs text-gray-600" value={asset.category} onChange={(e)=>handleUpdateAssetRow(asset.id,'category',e.target.value)}>
                                                                 <option value="" disabled>分類...</option>
-                                                                {assetCategories.map(c=><option key={c} value={c}>{c.split(' ')[0]}</option>)}
+                                                                {assetCategories.map(c=><option key={c} value={c}>{c}</option>)}
                                                             </select>
                                                         </td>
                                                         <td className="p-2">
@@ -553,7 +606,7 @@
                                                         </td>
                                                     </tr>
                                                 ))}
-                                                {assetList.length === 0 && <tr><td colSpan="3" className="p-8 text-center text-gray-400 text-xs">暫無資產，請從上方新增</td></tr>}
+                                                {assetList.length === 0 && <tr><td colSpan="3" className="p-8 text-center text-gray-400 text-xs">暫無資產，請從上方新增或使用 AI 推薦</td></tr>}
                                             </tbody>
                                         </table>
                                     </div>
@@ -639,7 +692,7 @@
                                                     </div>
                                                     <div className="flex gap-4 text-xs text-gray-500">
                                                         <span className="bg-gray-100 px-2 py-1 rounded">情境數: {history.scenarios?.length || 0}</span>
-                                                        <span className="bg-red-50 text-red-600 px-2 py-1 rounded border border-red-100">High Risk: {history.scenarios?.filter(s=>s.severity==='High'||s.severity==='Critical').length || 0}</span>
+                                                        <span className="bg-red-50 text-red-600 px-2 py-1 rounded border border-red-100">High/Crit: {history.scenarios?.filter(s=>s.severity==='High'||s.severity==='Critical').length}</span>
                                                     </div>
                                                 </div>
                                             ))}
@@ -725,7 +778,7 @@
 
                         {/* TAB 3: HISTORY DASHBOARD */}
                         {activeTab === 'history' && (
-                            <div className="flex-1 overflow-y-auto bg-gray-50 p-8">
+                            <div className="flex-1 overflow-y-auto bg-gray-50 p-8 pb-24">
                                 <div className="max-w-7xl mx-auto space-y-8">
                                     <div className="flex justify-between items-end">
                                         <div>
@@ -798,6 +851,37 @@
                             </div>
                         )}
                     </div>
+
+                    {/* API Key Modal */}
+                    {showKeyModal && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl w-full max-w-md shadow-2xl p-6">
+                                <h3 className="text-lg font-bold text-slate-800 mb-2">設定 Gemini API Key</h3>
+                                <p className="text-sm text-slate-500 mb-4">
+                                    由於網域限制，請輸入您的 API Key 以啟用 AI 功能。
+                                    <br/><span className="text-xs text-red-400">* Key 將僅儲存在您的瀏覽器中，不會上傳。</span>
+                                </p>
+                                <input 
+                                    type="password" 
+                                    className="w-full p-3 border border-gray-300 rounded-lg mb-4" 
+                                    placeholder="貼上您的 API Key..." 
+                                    autoFocus
+                                    onKeyDown={(e) => { if(e.key === 'Enter') handleSaveKey(e.target.value); }}
+                                />
+                                <div className="flex justify-end gap-2">
+                                    <button onClick={() => setShowKeyModal(false)} className="px-4 py-2 text-sm text-slate-500 hover:text-slate-700">取消</button>
+                                    <button onClick={(e) => handleSaveKey(e.target.previousSibling.value)} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700">儲存</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                     {/* Toast Notification */}
+                     {toast && (
+                        <div className={`fixed bottom-4 right-4 px-4 py-2 rounded-lg text-white text-sm font-bold shadow-lg animate-fade-in-up z-50 ${toast.type==='error'?'bg-red-500':'bg-emerald-600'}`}>
+                            {toast.message}
+                        </div>
+                    )}
                 </div>
             );
         };
