@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SIEM 資產與威脅戰情室 (Visual Ops)</title>
+    <title>SIEM 資產與威脅戰情室</title>
     
     <!-- 1. 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -272,6 +272,27 @@
                              >
                                 <LucideIcons.Mail size={12}/> 通報
                              </button>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); onGenerateLogs(scenario.title); }}
+                                className="flex items-center gap-1 text-xs text-slate-600 hover:text-white hover:bg-slate-600 border border-slate-200 px-2 py-1 rounded transition-colors"
+                                title="產生測試用 Log 樣本"
+                             >
+                                <LucideIcons.FileJson size={12}/> Logs
+                             </button>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); onAskRule(scenario.title); }}
+                                className="flex items-center gap-1 text-xs text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-200 px-2 py-1 rounded transition-colors"
+                                title="產生 Splunk/Sigma 規則"
+                             >
+                                <LucideIcons.Code2 size={12}/> 規則
+                             </button>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); onAskMitigation(scenario.title); }}
+                                className="flex items-center gap-1 text-xs text-indigo-600 hover:text-white hover:bg-indigo-600 border border-indigo-200 px-2 py-1 rounded transition-colors"
+                                title="產生應變與緩解建議"
+                             >
+                                <LucideIcons.ShieldAlert size={12}/> 緩解
+                             </button>
                         </div>
                     </div>
                 </div>
@@ -351,7 +372,7 @@
             const [queryGenOpen, setQueryGenOpen] = useState(false);
             const [scriptAnalyzerOpen, setScriptAnalyzerOpen] = useState(false);
             const [summaryModalOpen, setSummaryModalOpen] = useState(false);
-            const [visualizeModalOpen, setVisualizeModalOpen] = useState(false); // New Visualization Modal
+            const [visualizeModalOpen, setVisualizeModalOpen] = useState(false);
 
             // Tool States
             const [rawLogInput, setRawLogInput] = useState('');
@@ -654,6 +675,13 @@
             
             const handleOpenImplementationGuide = () => { setActiveTab('indicators'); if (playbookResult) setResultViewMode('guide'); else if (playbookHistory.length > 0) { const latest = playbookHistory[0]; setSystemInput(latest.input); setPlaybookResult(latest.content); setResultViewMode('guide'); } };
 
+            // --- Chat Handlers ---
+            useEffect(() => {
+                if (chatEndRef.current) {
+                    chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+                }
+            }, [chatHistory, isChatOpen]);
+
             const handleChatSubmit = async (e) => {
                 e.preventDefault();
                 if (!chatInput.trim()) return;
@@ -661,7 +689,13 @@
                 setChatInput("");
                 setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
                 setChatLoading(true);
-                const prompt = `Role: Senior SOC Analyst. User Question: ${userMsg} Answer concisely in Traditional Chinese.`;
+
+                const prompt = `
+                Role: Senior SOC Analyst & SIEM Engineer Assistant.
+                User Question: ${userMsg}
+                Answer concisely in Traditional Chinese. Provide technical details, SIEM rule examples (Splunk/Sigma), or mitigation steps if asked.
+                `;
+
                 try {
                     const reply = await fetchGeminiResponse(prompt);
                     setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
@@ -671,76 +705,247 @@
                     setChatLoading(false);
                 }
             };
-            useEffect(() => { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [chatHistory, isChatOpen]);
 
-            // Handlers for AI Buttons (placeholders or real logic)
             const handleAskMitigation = async (title) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `請針對威脅情境『${title}』提供詳細的緩解措施。` }]);
+                const query = `請針對威脅情境『${title}』提供詳細的緩解措施 (Mitigation Steps)。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: Senior SOC Analyst. Provide mitigation for: "${title}". Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: Senior SOC Analyst. Provide step-by-step mitigation plan for: "${title}". Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
+
             const handleAskRule = async (title) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `請針對威脅情境『${title}』生成 SIEM 規則。` }]);
+                const query = `請針對威脅情境『${title}』生成 SIEM 關聯規則 (Splunk SPL & Sigma)。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: SIEM Engineer. Generate Splunk SPL/Sigma for: "${title}". Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: SIEM Content Engineer. Generate Splunk SPL and Sigma rule for threat: "${title}". Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
+
             const handleGenerateMockLog = async (title) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `請針對威脅情境『${title}』產生測試 Log。` }]);
+                const query = `請針對威脅情境『${title}』產生測試用的 Log 樣本 (Syslog/JSON)。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: System Admin. Generate sample logs for: "${title}".`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: System Administrator. Generate realistic sample logs (Syslog and JSON format) for the threat scenario: "${title}". Ensure timestamps, IPs, and user fields are realistic.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
+
+            const handleAnalyzeVulnerabilities = async (assetName, category) => {
+                setIsChatOpen(true);
+                const query = `請分析資產 ${assetName} (${category}) 常見的 CVE 漏洞與弱點配置。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: Vulnerability Analyst. List top 3 common CVEs and misconfigurations for: ${assetName} (${category}). Provide remediation advice. Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
             const handleDraftEmail = async (scenario) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `請撰寫關於『${scenario.title}』的資安通報信件。` }]);
+                const title = scenario.title || "未知威脅";
+                const severity = scenario.severity || "Unknown";
+                const query = `請撰寫一份關於『${title}』(等級: ${severity}) 的資安通報郵件。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: Incident Manager. Draft notification email for: "${scenario.title}". Severity: ${scenario.severity}. Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: Incident Response Manager. Draft a formal security incident notification email for "${title}" (Severity: ${severity}). Audience: IT Management & Stakeholders. Include specific details and recommended actions. Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "撰寫失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
+
             const handleAskThreatIntel = async (title) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `分析『${title}』的威脅情資。` }]);
+                const query = `請分析威脅情境『${title}』的相關情資 (APT 組織、惡意軟體、IOCs)。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: Threat Intel Analyst. Analyze attribution/IOCs for: "${title}". Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: Threat Intelligence Analyst. Provide attribution (APT groups, malware families) and key IOC types associated with: "${title}". Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
-            const handleAskCompliance = async (title) => {
+
+            const handlePredictAttackPath = async (assetName, category) => {
                 setIsChatOpen(true);
-                setChatHistory(prev => [...prev, { role: 'user', text: `分析『${title}』的合規影響 (ISO/NIST)。` }]);
+                const query = `如果資產 ${assetName} (${category}) 被攻陷，預測可能的攻擊路徑與橫向移動目標。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
                 setChatLoading(true);
-                const prompt = `Role: GRC Consultant. Map "${title}" to ISO 27001/NIST controls. Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                
+                const prompt = `Role: Red Team Operator. Scenario: Asset "${assetName}" (${category}) is compromised. Describe the most likely lateral movement path and ultimate objective (Crown Jewels). Return a concise kill chain in Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "預測失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
+
+            // Log Parser Logic
+            const handleLogParse = async () => {
+                if (!rawLogInput.trim()) return;
+                setIsParsingLog(true);
+                const prompt = `Role: SOC Analyst. Parse the following raw log into a structured JSON object. Identify fields like timestamp, source_ip, destination_ip, event_id, user, action, etc. Log: """${rawLogInput}""" Return ONLY the JSON object.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    // Extract JSON if wrapped in code blocks
+                    const jsonMatch = reply.match(/\{[\s\S]*\}/);
+                    const jsonStr = jsonMatch ? jsonMatch[0] : reply;
+                    setParsedLogResult(jsonStr);
+                } catch (err) {
+                    setParsedLogResult("解析失敗: " + err.message);
+                } finally {
+                    setIsParsingLog(false);
+                }
+            };
+            
+            // New Feature: Compliance Analysis (GRC)
+            const handleComplianceAnalysis = async (title) => {
+                setIsChatOpen(true);
+                const query = `請分析威脅情境『${title}』違反了哪些 ISO 27001 或 NIST CSF 合規項目。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: GRC Consultant. Analyze threat "${title}" and map it to specific violated controls in ISO 27001:2022 and NIST CSF 2.0. Format as a table. Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
+            // New Feature: Natural Language to Query (NL2Q)
+            const handleGenerateQuery = async () => {
+                if (!nlQueryInput.trim()) return;
+                setIsGeneratingQuery(true);
+                const prompt = `Role: SIEM Expert. Convert natural language "${nlQueryInput}" into a specific query for "${queryPlatform}". Output ONLY the query code block.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setGeneratedQuery(reply);
+                } catch (err) {
+                    setGeneratedQuery("生成失敗: " + err.message);
+                } finally {
+                    setIsGeneratingQuery(false);
+                }
+            };
+
+            // New Feature: Script Analyzer
+            const handleAnalyzeScript = async () => {
+                if (!scriptInput.trim()) return;
+                setIsAnalyzingScript(true);
+                const prompt = `Role: Malware Analyst. Analyze the following script. Explain its functionality, identify malicious intent, and extract any IOCs (IPs, URLs, file paths). Script: """${scriptInput}""" Output in Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setScriptAnalysisResult(reply);
+                } catch (err) {
+                    setScriptAnalysisResult("分析失敗: " + err.message);
+                } finally {
+                    setIsAnalyzingScript(false);
+                }
+            };
+
+            // New Feature: IR Playbook Generator
             const handleGenerateIRPlaybook = async (title) => {
                 setIsChatOpen(true);
                 setChatHistory(prev => [...prev, { role: 'user', text: `產生『${title}』的 IR 劇本。` }]);
                 setChatLoading(true);
-                const prompt = `Role: IR Commander. Generate NIST IR Playbook for: "${title}". Traditional Chinese.`;
-                try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+                const prompt = `Role: Incident Response Commander. Create a detailed Incident Response Playbook for the threat: '${title}'. Follow NIST SP 800-61 phases: 1. Preparation 2. Detection & Analysis 3. Containment 4. Eradication 5. Recovery 6. Post-Incident Activity. Output in Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
             };
-            const handleAnalyzeVulnerabilities = async (name, cat) => {
-                 setIsChatOpen(true);
-                 setChatHistory(prev => [...prev, { role: 'user', text: `分析資產 ${name} (${cat}) 的弱點。` }]);
-                 setChatLoading(true);
-                 const prompt = `Role: Vuln Analyst. List common CVEs/misconfigs for ${name} (${cat}). Traditional Chinese.`;
-                 try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
+
+            // --- Executive Summary Handler ---
+            const handleGenerateExecutiveSummary = async () => {
+                if (!threatHistory.length) {
+                    showToast('請先累積一些威脅分析歷史紀錄', 'error');
+                    return;
+                }
+                setSummaryModalOpen(true);
+                setSummaryLoading(true);
+                
+                const stats = aggregatedHistory;
+                const criticalCount = stats.byRisk.Critical.length;
+                const highCount = stats.byRisk.High.length;
+                const topRisks = [...stats.byRisk.Critical, ...stats.byRisk.High].slice(0, 5).map(r => r.title).join(", ");
+                
+                const prompt = `
+                Role: CISO.
+                Context:
+                - Critical Risks: ${criticalCount}
+                - High Risks: ${highCount}
+                - Top Threats: ${topRisks}
+                
+                Task: Write a concise Executive Summary (資安態勢高層匯報) in Traditional Chinese.
+                Structure:
+                1. Executive Summary (摘要)
+                2. Key Risk Indicators (關鍵風險指標)
+                3. Strategic Recommendations (策略建議)
+                `;
+                
+                try {
+                    const text = await fetchGeminiResponse(prompt);
+                    setSummaryContent(text);
+                } catch (e) {
+                    setSummaryContent("生成失敗: " + e.message);
+                } finally {
+                    setSummaryLoading(false);
+                }
             };
-            const handlePredictAttackPath = async (name, cat) => {
-                 setIsChatOpen(true);
-                 setChatHistory(prev => [...prev, { role: 'user', text: `預測資產 ${name} (${cat}) 的攻擊路徑。` }]);
-                 setChatLoading(true);
-                 const prompt = `Role: Red Team. Predict attack path if ${name} (${cat}) is compromised. Traditional Chinese.`;
-                 try { const reply = await fetchGeminiResponse(prompt); setChatHistory(prev => [...prev, { role: 'bot', text: reply }]); } catch (err) { setChatHistory(prev => [...prev, { role: 'bot', text: "生成失敗。" }]); } finally { setChatLoading(false); }
-            };
-            const handleLogParse = async () => { /* ... existing ... */ };
-            const handleGenerateQuery = async () => { /* ... existing ... */ };
-            const handleAnalyzeScript = async () => { /* ... existing ... */ };
-            const handleGenerateExecutiveSummary = async () => { /* ... existing ... */ };
 
             return (
                 <div className="h-full flex flex-col bg-slate-50 font-sans relative">
@@ -1073,7 +1278,7 @@
                                             { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: AlertOctagon },
                                             { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: AlertTriangle },
                                             { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: Activity },
-                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: Info }
+                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: LucideIcons.Info }
                                         ].map((stat, i) => (
                                             <div key={i} className={`bg-white p-5 rounded-xl border-l-4 shadow-sm flex justify-between items-center border-${stat.color}-500`}>
                                                 <div>
