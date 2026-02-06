@@ -165,7 +165,7 @@
         };
 
         // --- Modified ScenarioCard with AI Features ---
-        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs }) => {
+        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance }) => {
             if (!scenario) return null;
             let severityClass = 'bg-blue-50 text-blue-600 border-blue-200';
             if(scenario.severity==='Critical') severityClass = 'bg-rose-900 text-white border-rose-900';
@@ -202,25 +202,46 @@
                         {/* AI Action Buttons */}
                         <div className="flex flex-wrap justify-end gap-2 mt-2 pt-2 border-t border-slate-200 opacity-80 group-hover:opacity-100 transition-opacity">
                              <button 
+                                onClick={(e) => { e.stopPropagation(); onAskCompliance(scenario.title); }}
+                                className="flex items-center gap-1 text-xs text-teal-600 hover:text-white hover:bg-teal-600 border border-teal-200 px-2 py-1 rounded transition-colors"
+                                title="合規性分析 (ISO/NIST)"
+                             >
+                                <LucideIcons.Scale size={12}/> 合規
+                             </button>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); onAskThreatIntel(scenario.title); }}
+                                className="flex items-center gap-1 text-xs text-purple-600 hover:text-white hover:bg-purple-600 border border-purple-200 px-2 py-1 rounded transition-colors"
+                                title="分析 APT 組織與威脅情資"
+                             >
+                                <LucideIcons.Globe size={12}/> 情資
+                             </button>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); onDraftEmail(scenario); }}
+                                className="flex items-center gap-1 text-xs text-orange-600 hover:text-white hover:bg-orange-600 border border-orange-200 px-2 py-1 rounded transition-colors"
+                                title="撰寫通報郵件"
+                             >
+                                <LucideIcons.Mail size={12}/> 通報
+                             </button>
+                             <button 
                                 onClick={(e) => { e.stopPropagation(); onGenerateLogs(scenario.title); }}
                                 className="flex items-center gap-1 text-xs text-slate-600 hover:text-white hover:bg-slate-600 border border-slate-200 px-2 py-1 rounded transition-colors"
                                 title="產生測試用 Log 樣本"
                              >
-                                <LucideIcons.FileJson size={12}/> 產生 Logs
+                                <LucideIcons.FileJson size={12}/> Logs
                              </button>
                              <button 
                                 onClick={(e) => { e.stopPropagation(); onAskRule(scenario.title); }}
                                 className="flex items-center gap-1 text-xs text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-200 px-2 py-1 rounded transition-colors"
                                 title="產生 Splunk/Sigma 規則"
                              >
-                                <LucideIcons.Code2 size={12}/> 產生規則
+                                <LucideIcons.Code2 size={12}/> 規則
                              </button>
                              <button 
                                 onClick={(e) => { e.stopPropagation(); onAskMitigation(scenario.title); }}
                                 className="flex items-center gap-1 text-xs text-indigo-600 hover:text-white hover:bg-indigo-600 border border-indigo-200 px-2 py-1 rounded transition-colors"
                                 title="產生應變與緩解建議"
                              >
-                                <LucideIcons.ShieldAlert size={12}/> 緩解建議
+                                <LucideIcons.ShieldAlert size={12}/> 緩解
                              </button>
                         </div>
                     </div>
@@ -236,7 +257,8 @@
                 ListChecks, BarChart3, Wrench, Download, LayoutGrid, ScrollText, Wand2,
                 LayoutDashboard, GanttChartSquare, History, AlertOctagon, AlertTriangle, Info,
                 FileText, CheckCircle, Rocket, Mail, MessageCircleQuestion, FilePenLine, FileCode, FileSpreadsheet,
-                Fingerprint, Network, Laptop, Lock, Save, MessageSquare, Send, X, Code2, ShieldAlert, FileJson, Bug
+                Fingerprint, Network, Laptop, Lock, Save, MessageSquare, Send, X, Code2, ShieldAlert, FileJson, Bug, Microscope,
+                Footprints, Globe, Scale, Terminal
             } = LucideIcons;
 
             // --- API Key Protection ---
@@ -295,11 +317,24 @@
             const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
             const [analysisType, setAnalysisType] = useState('ALL');
 
+            // Log Parser & Query Generator State
+            const [logParserOpen, setLogParserOpen] = useState(false);
+            const [rawLogInput, setRawLogInput] = useState('');
+            const [parsedLogResult, setParsedLogResult] = useState('');
+            const [isParsingLog, setIsParsingLog] = useState(false);
+
+            const [queryGenOpen, setQueryGenOpen] = useState(false);
+            const [nlQueryInput, setNlQueryInput] = useState('');
+            const [queryPlatform, setQueryPlatform] = useState('Splunk');
+            const [generatedQuery, setGeneratedQuery] = useState('');
+            const [isGeneratingQuery, setIsGeneratingQuery] = useState(false);
+
+
             // Chat & New AI Features States
             const [isChatOpen, setIsChatOpen] = useState(false);
             const [chatInput, setChatInput] = useState("");
             const [chatHistory, setChatHistory] = useState([
-                { role: 'bot', text: '您好！我是您的 SOC 智能助手。我可以協助您解讀威脅情報、撰寫 SIEM 規則、產生測試 Log 或提供緩解建議。' }
+                { role: 'bot', text: '您好！我是您的 SOC 智能助手。我可以協助您解讀威脅情報、撰寫 SIEM 規則、產生測試 Log、分析合規性或提供緩解建議。' }
             ]);
             const [chatLoading, setChatLoading] = useState(false);
             const chatEndRef = useRef(null);
@@ -484,7 +519,11 @@
                 2. 建議收集的 Log 與關聯規則。
                 3. 產出 5 到 10 個具體的情境。
                 4. Risk Level 請包含 "Critical", "High", "Medium", "Low" 四種。
-                5. 請務必將每個情境嚴格歸類到以下四類之一 (Category)：身分與存取威脅、網路邊界與異常連線、端點行為與惡意程式、防禦規避與系統健康。
+                5. 請務必將每個情境嚴格歸類到以下四類之一 (Category)：
+                   - 身分與存取威脅
+                   - 網路邊界與異常連線
+                   - 端點行為與惡意程式
+                   - 防禦規避與系統健康
 
                 請以 JSON 格式回傳，結構如下：
                 {
@@ -668,6 +707,110 @@
                 }
             };
 
+            const handleDraftEmail = async (scenario) => {
+                setIsChatOpen(true);
+                const title = scenario.title || "未知威脅";
+                const severity = scenario.severity || "Unknown";
+                const query = `請撰寫一份關於『${title}』(等級: ${severity}) 的資安通報郵件。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: Incident Response Manager. Draft a formal security incident notification email for "${title}" (Severity: ${severity}). Audience: IT Management & Stakeholders. Include specific details and recommended actions. Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "撰寫失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
+            const handleAskThreatIntel = async (title) => {
+                setIsChatOpen(true);
+                const query = `請分析威脅情境『${title}』的相關情資 (APT 組織、惡意軟體、IOCs)。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: Threat Intelligence Analyst. Provide attribution (APT groups, malware families) and key IOC types associated with: "${title}". Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
+            const handlePredictAttackPath = async (assetName, category) => {
+                setIsChatOpen(true);
+                const query = `如果資產 ${assetName} (${category}) 被攻陷，預測可能的攻擊路徑與橫向移動目標。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: Red Team Operator. Scenario: Asset "${assetName}" (${category}) is compromised. Describe the most likely lateral movement path and ultimate objective (Crown Jewels). Return a concise kill chain in Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "預測失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
+            // Log Parser Logic
+            const handleLogParse = async () => {
+                if (!rawLogInput.trim()) return;
+                setIsParsingLog(true);
+                const prompt = `Role: SOC Analyst. Parse the following raw log into a structured JSON object. Identify fields like timestamp, source_ip, destination_ip, event_id, user, action, etc. Log: """${rawLogInput}""" Return ONLY the JSON object.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    // Extract JSON if wrapped in code blocks
+                    const jsonMatch = reply.match(/\{[\s\S]*\}/);
+                    const jsonStr = jsonMatch ? jsonMatch[0] : reply;
+                    setParsedLogResult(jsonStr);
+                } catch (err) {
+                    setParsedLogResult("解析失敗: " + err.message);
+                } finally {
+                    setIsParsingLog(false);
+                }
+            };
+            
+            // New Feature: Compliance Analysis (GRC)
+            const handleComplianceAnalysis = async (title) => {
+                setIsChatOpen(true);
+                const query = `請分析威脅情境『${title}』違反了哪些 ISO 27001 或 NIST CSF 合規項目。`;
+                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
+                setChatLoading(true);
+                
+                const prompt = `Role: GRC Consultant. Analyze threat "${title}" and map it to specific violated controls in ISO 27001:2022 and NIST CSF 2.0. Format as a table. Traditional Chinese.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
+                } catch (err) {
+                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
+                } finally {
+                    setChatLoading(false);
+                }
+            };
+
+            // New Feature: Natural Language to Query (NL2Q)
+            const handleGenerateQuery = async () => {
+                if (!nlQueryInput.trim()) return;
+                setIsGeneratingQuery(true);
+                const prompt = `Role: SIEM Expert. Convert natural language "${nlQueryInput}" into a specific query for "${queryPlatform}". Output ONLY the query code block.`;
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setGeneratedQuery(reply);
+                } catch (err) {
+                    setGeneratedQuery("生成失敗: " + err.message);
+                } finally {
+                    setIsGeneratingQuery(false);
+                }
+            };
+
             // --- Executive Summary Handler ---
             const handleGenerateExecutiveSummary = async () => {
                 if (!threatHistory.length) {
@@ -718,6 +861,8 @@
                             </div>
                         </div>
                         <div className="flex items-center gap-4">
+                             <button onClick={()=>setQueryGenOpen(true)} className="flex items-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors"><LucideIcons.Terminal size={14} className="text-emerald-400"/> 查詢生成器</button>
+                             <button onClick={()=>setLogParserOpen(true)} className="flex items-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors"><Microscope size={14} className="text-indigo-400"/> Log 解析器</button>
                              {syncStatus === 'connecting' && <span className="text-xs text-yellow-400 animate-pulse flex items-center gap-1 bg-yellow-400/10 px-2 py-1 rounded-full"><Cloud size={12}/> 連線中...</span>}
                              {syncStatus === 'synced' && <span className="text-xs text-green-400 flex items-center gap-1 bg-green-400/10 px-2 py-1 rounded-full"><Check size={12}/> 雲端共用中</span>}
                              {syncStatus === 'error' && (
@@ -811,6 +956,13 @@
                                                             >
                                                                 <Bug size={14}/>
                                                             </button>
+                                                            <button 
+                                                                onClick={() => handlePredictAttackPath(asset.name, asset.category)}
+                                                                className="text-red-500 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                                                title="預測攻擊路徑"
+                                                            >
+                                                                <Footprints size={14}/>
+                                                            </button>
                                                             <button onClick={()=>handleDeleteAssetRow(asset.id)} className="text-gray-300 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-colors"><Trash size={14}/></button>
                                                         </td>
                                                     </tr>
@@ -889,8 +1041,11 @@
                                                                     key={i} 
                                                                     scenario={s} 
                                                                     onAskMitigation={handleAskMitigation} 
-                                                                    onAskRule={handleAskRule}
+                                                                    onAskRule={handleAskRule} 
                                                                     onGenerateLogs={handleGenerateMockLog}
+                                                                    onDraftEmail={handleDraftEmail}
+                                                                    onAskThreatIntel={handleAskThreatIntel}
+                                                                    onAskCompliance={handleComplianceAnalysis}
                                                                 />
                                                             ))}
                                                         </div>
@@ -1019,10 +1174,10 @@
                                     {/* Stats Cards */}
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                         {[
-                                            { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: AlertOctagon },
-                                            { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: AlertTriangle },
-                                            { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: Activity },
-                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: Info }
+                                            { label: 'Critical Risk', count: aggregatedHistory.byRisk.Critical?.length || 0, color: 'rose', icon: LucideIcons.AlertOctagon },
+                                            { label: 'High Risk', count: aggregatedHistory.byRisk.High?.length || 0, color: 'red', icon: LucideIcons.AlertTriangle },
+                                            { label: 'Medium Risk', count: aggregatedHistory.byRisk.Medium?.length || 0, color: 'yellow', icon: LucideIcons.Activity },
+                                            { label: 'Low Risk', count: aggregatedHistory.byRisk.Low?.length || 0, color: 'blue', icon: LucideIcons.Info }
                                         ].map((stat, i) => (
                                             <div key={i} className={`bg-white p-5 rounded-xl border-l-4 shadow-sm flex justify-between items-center border-${stat.color}-500`}>
                                                 <div>
@@ -1046,7 +1201,7 @@
                                                             {level} Priority <span className="bg-white px-2 py-0.5 rounded text-xs border shadow-sm">{aggregatedHistory.byRisk[level]?.length || 0}</span>
                                                         </div>
                                                         <div className="p-3 overflow-y-auto flex-1 bg-slate-50 space-y-3">
-                                                            {aggregatedHistory.byRisk[level]?.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog}/>)}
+                                                            {aggregatedHistory.byRisk[level]?.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail}/>)}
                                                             {(!aggregatedHistory.byRisk[level]?.length) && <div className="text-center text-gray-400 text-xs mt-20">無資料</div>}
                                                         </div>
                                                     </div>
@@ -1065,7 +1220,7 @@
                                                         </div>
                                                         {items.length > 0 && (
                                                             <div className="p-2 max-h-[300px] overflow-y-auto bg-slate-50 space-y-2">
-                                                                {items.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog}/>)}
+                                                                {items.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail}/>)}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1126,6 +1281,93 @@ service cloud.firestore {
                                 </div>
                                 <div className="p-4 border-t bg-gray-50 flex justify-end rounded-b-xl">
                                     <button onClick={()=>handleExportTxt(summaryContent)} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center gap-2"><Download size={16}/> 下載報告</button>
+                                </div>
+                            </div>
+                        </div>
+                     )}
+
+                     {/* Log Parser Modal */}
+                     {logParserOpen && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl">
+                                <div className="bg-slate-900 text-white p-4 flex justify-between items-center rounded-t-xl">
+                                    <h3 className="font-bold text-lg flex items-center gap-2"><Microscope/> Log 智能解析器</h3>
+                                    <button onClick={() => setLogParserOpen(false)} className="hover:text-gray-300"><X size={20}/></button>
+                                </div>
+                                <div className="p-6 flex-1 flex flex-col overflow-hidden">
+                                    <div className="flex-1 flex flex-col gap-2 mb-4">
+                                        <label className="text-xs font-bold text-gray-500 uppercase">原始 Log 內容 (Raw Log)</label>
+                                        <textarea 
+                                            className="w-full h-32 p-3 border border-gray-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500 resize-none" 
+                                            placeholder="請貼上 Syslog, CEF, JSON 或其他格式的 Log..."
+                                            value={rawLogInput}
+                                            onChange={(e) => setRawLogInput(e.target.value)}
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={handleLogParse} 
+                                        disabled={isParsingLog || !rawLogInput}
+                                        className="bg-indigo-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-indigo-700 disabled:opacity-50 mb-4 flex items-center justify-center gap-2"
+                                    >
+                                        {isParsingLog ? <Loader2 size={16} className="animate-spin"/> : <Wand2 size={16}/>} 開始解析
+                                    </button>
+                                    <div className="flex-1 border border-gray-200 rounded-lg bg-slate-50 p-4 overflow-y-auto">
+                                        {parsedLogResult ? (
+                                            <pre className="text-xs font-mono text-slate-700 whitespace-pre-wrap">{parsedLogResult}</pre>
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-gray-400 text-xs">解析結果將顯示於此...</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                     )}
+
+                     {/* Query Generator Modal */}
+                     {queryGenOpen && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl w-full max-w-lg h-[600px] flex flex-col shadow-2xl">
+                                <div className="bg-slate-900 text-white p-4 flex justify-between items-center rounded-t-xl">
+                                    <h3 className="font-bold text-lg flex items-center gap-2"><LucideIcons.Terminal/> 查詢語法生成器</h3>
+                                    <button onClick={() => setQueryGenOpen(false)} className="hover:text-gray-300"><X size={20}/></button>
+                                </div>
+                                <div className="p-6 flex-1 flex flex-col overflow-hidden">
+                                    <div className="mb-4">
+                                        <label className="text-xs font-bold text-gray-500 uppercase block mb-1">目標平台</label>
+                                        <select 
+                                            className="w-full p-2 border border-gray-300 rounded-lg text-sm bg-white"
+                                            value={queryPlatform}
+                                            onChange={(e) => setQueryPlatform(e.target.value)}
+                                        >
+                                            <option value="Splunk">Splunk (SPL)</option>
+                                            <option value="Elasticsearch">Elasticsearch (KQL)</option>
+                                            <option value="SQL">SQL (Standard)</option>
+                                            <option value="Graylog">Graylog</option>
+                                        </select>
+                                    </div>
+                                    <div className="mb-4 flex-1 flex flex-col">
+                                        <label className="text-xs font-bold text-gray-500 uppercase block mb-1">自然語言描述</label>
+                                        <textarea 
+                                            className="w-full h-24 p-3 border border-gray-300 rounded-lg text-sm resize-none focus:ring-2 focus:ring-indigo-500"
+                                            placeholder="例如：找出過去 24 小時內登入失敗超過 10 次的來源 IP..."
+                                            value={nlQueryInput}
+                                            onChange={(e) => setNlQueryInput(e.target.value)}
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={handleGenerateQuery} 
+                                        disabled={isGeneratingQuery || !nlQueryInput}
+                                        className="bg-indigo-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-indigo-700 disabled:opacity-50 mb-4 flex items-center justify-center gap-2"
+                                    >
+                                        {isGeneratingQuery ? <Loader2 size={16} className="animate-spin"/> : <Code2 size={16}/>} 生成查詢語法
+                                    </button>
+                                    <div className="flex-1 border border-gray-200 rounded-lg bg-slate-900 p-4 overflow-y-auto">
+                                        {generatedQuery ? (
+                                            <pre className="text-xs font-mono text-green-400 whitespace-pre-wrap">{generatedQuery}</pre>
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-gray-500 text-xs">語法將顯示於此...</div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
