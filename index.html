@@ -248,7 +248,7 @@
             return <div ref={ref} className="w-full overflow-x-auto flex justify-center py-4 bg-white rounded-lg border border-slate-100"></div>;
         };
 
-        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, onExplainCDM, minimal = false }) => {
+        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, minimal = false }) => {
             if (!scenario) return null;
             let severityClass = 'bg-blue-50 text-blue-600 border-blue-200';
             if(scenario.severity==='Critical') severityClass = 'bg-rose-900 text-white border-rose-900';
@@ -263,21 +263,10 @@
 
             if (minimal) {
                 return (
-                    <div className="border-b border-gray-100 last:border-0 pb-2 mb-2 group/item">
+                    <div className="border-b border-gray-100 last:border-0 pb-2 mb-2">
                         <div className="flex items-center justify-between mb-1">
                             <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${severityClass}`}>{scenario.severity}</span>
-                            <div className="flex items-center gap-1">
-                                <span className="text-[10px] text-gray-400">{scenario.source_date?.split(' ')[0]}</span>
-                                {onExplainCDM && (
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); onExplainCDM(scenario); }}
-                                        className="text-slate-300 hover:text-indigo-600 p-0.5 rounded-full hover:bg-indigo-50 transition-colors opacity-0 group-hover/item:opacity-100"
-                                        title="AI 歸類解析：為什麼在這裡？"
-                                    >
-                                        <LucideIcons.MessageCircleQuestion size={12}/>
-                                    </button>
-                                )}
-                            </div>
+                            <span className="text-[10px] text-gray-400">{scenario.source_date?.split(' ')[0]}</span>
                         </div>
                         <div className="font-bold text-slate-800 text-xs truncate" title={scenario.title}>{scenario.title}</div>
                         <div className="text-[10px] text-slate-500 truncate" title={scenario.correlation_logic}>{scenario.correlation_logic}</div>
@@ -534,8 +523,7 @@
                 if (!user) return;
                 setSyncStatus('connecting');
                 
-                // Fixed paths to use 'public/data/shared/{collectionName}' to comply with rules
-                const assetsQuery = doc(db, 'artifacts', appId, 'public', 'data', 'shared', 'assets');
+                const assetsQuery = doc(db, 'artifacts', appId, 'shared_data', 'assets');
                 const unsubAssets = onSnapshot(assetsQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -543,7 +531,7 @@
                     }
                 }, (err) => handleSyncError(err));
 
-                const historyQuery = doc(db, 'artifacts', appId, 'public', 'data', 'shared', 'threatHistory');
+                const historyQuery = doc(db, 'artifacts', appId, 'shared_data', 'threatHistory');
                 const unsubHistory = onSnapshot(historyQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -556,7 +544,7 @@
                     }
                 }, (err) => handleSyncError(err));
 
-                const playbookQuery = doc(db, 'artifacts', appId, 'public', 'data', 'shared', 'playbookHistory');
+                const playbookQuery = doc(db, 'artifacts', appId, 'shared_data', 'playbookHistory');
                 const unsubPlaybook = onSnapshot(playbookQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -567,7 +555,7 @@
                      setSyncStatus('synced');
                 }, (err) => handleSyncError(err));
                 
-                const guidesQuery = doc(db, 'artifacts', appId, 'public', 'data', 'shared', 'logGuides');
+                const guidesQuery = doc(db, 'artifacts', appId, 'shared_data', 'logGuides');
                 const unsubGuides = onSnapshot(guidesQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -599,8 +587,7 @@
                 }
                 setSyncStatus('connecting');
                 try {
-                    // Fixed path to use 'public/data/shared/{collectionName}' to comply with rules
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shared', collectionName), { items: dataValue });
+                    await setDoc(doc(db, 'artifacts', appId, 'shared_data', collectionName), { items: dataValue });
                     setSyncStatus('synced');
                     setLastSaved(new Date().toLocaleTimeString());
                     setDbError(''); 
@@ -640,7 +627,6 @@
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({}));
                         if (response.status === 403 || response.status === 400) {
-                            // If key is missing or invalid, prompt user
                             if (errorData.error?.message?.includes('API Key') || response.status === 403) {
                                 setShowApiKeyModal(true);
                                 throw new Error("API Key 無效或缺失，請在設定中輸入您的 Gemini API Key。");
@@ -871,39 +857,6 @@
 
                 return matrix;
             }, [aggregatedHistory, cdmFilter]);
-
-            // --- CDM Explanation Logic ---
-            const handleExplainCDM = async (scenario) => {
-                const { functionType, assetType } = getCDMCell(scenario);
-                setIsChatOpen(true);
-                const query = `請分析威脅情境『${scenario.title}』在 CDM 矩陣的歸類 (Function: ${functionType}, Asset: ${assetType}) 是否合理？`;
-                
-                setChatHistory(prev => [...prev, { role: 'user', text: query }]);
-                setChatLoading(true);
-
-                const prompt = `
-                Role: Senior Cybersecurity Consultant & CDM Framework Expert.
-                Context: User is asking about the classification of a threat scenario in the Cyber Defense Matrix (NIST CSF 2.0).
-                Scenario: "${scenario.title}"
-                Current Classification: Function = ${functionType}, Asset = ${assetType}
-                System Logic: Keyword matching (e.g., 'audit' -> GOVERN, 'block' -> PROTECT).
-                
-                Task:
-                1. Explain WHY the system might have classified it this way (keywords).
-                2. Analyze if this classification is correct from a strict cybersecurity perspective. 
-                   - For example, "Disabling Audit Logs" is an evasion technique. While it involves "Audit" (Govern), detecting it is a DETECT function, and preventing it is a PROTECT function.
-                3. Provide the most accurate classification and explanation in Traditional Chinese.
-                `;
-
-                try {
-                    const reply = await fetchGeminiResponse(prompt);
-                    setChatHistory(prev => [...prev, { role: 'bot', text: reply }]);
-                } catch (err) {
-                    setChatHistory(prev => [...prev, { role: 'bot', text: "分析失敗，請稍後再試。" }]);
-                } finally {
-                    setChatLoading(false);
-                }
-            };
 
             // --- RACI Matrix Logic ---
             const raciMatrixData = useMemo(() => {
@@ -1825,7 +1778,6 @@
                                                                                     onGenerateIRPlaybook={handleGenerateIRPlaybook} 
                                                                                     onVisualize={handleVisualize}
                                                                                     onSimulate={handleStartSimulation}
-                                                                                    onExplainCDM={() => handleExplainCDM(s)}
                                                                                 />
                                                                             ))
                                                                         )}
@@ -1836,29 +1788,6 @@
                                                     </div>
                                                 );
                                             })}
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                            <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><Target size={16}/> 矩陣分析說明</h4>
-                                            <p className="text-xs text-gray-500 leading-relaxed">
-                                                此矩陣將您的所有歷史威脅情境，依照 NIST CSF 2.0 (列) 與資產類別 (欄) 進行自動分類。大多數 SIEM 情境通常集中在 <strong>DETECT (偵測)</strong> 區域，但包含阻擋與聯動回應的情境會分佈在 PROTECT 與 RESPOND。
-                                                <br/><br/>
-                                                <span className="text-indigo-600 font-bold">小提示：</span> 點擊情境卡片右上角的問號 <LucideIcons.MessageCircleQuestion size={12} className="inline"/> 按鈕，可讓 AI 深入解釋該歸類的原因。
-                                            </p>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                            <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-2"><ShieldCheck size={16}/> 防禦覆蓋率洞察</h4>
-                                            <div className="text-xs text-gray-500 space-y-1">
-                                                <div className="flex justify-between"><span>Detect Coverage:</span> <span className="font-bold text-amber-600">{Math.round((cdmMatrixData['DETECT'] ? Object.values(cdmMatrixData['DETECT']).flat().length : 0) / (Object.values(aggregatedHistory.byRisk).flat().length || 1) * 100)}%</span></div>
-                                                <div className="flex justify-between"><span>Protect Coverage:</span> <span className="font-bold text-emerald-600">{Math.round((cdmMatrixData['PROTECT'] ? Object.values(cdmMatrixData['PROTECT']).flat().length : 0) / (Object.values(aggregatedHistory.byRisk).flat().length || 1) * 100)}%</span></div>
-                                            </div>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex items-center justify-center">
-                                            <button className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1" onClick={()=>window.open('[https://cyberdefensematrix.com/](https://cyberdefensematrix.com/)', '_blank')}>
-                                                <Globe size={14}/> 了解更多 Cyber Defense Matrix
-                                            </button>
                                         </div>
                                     </div>
                                 </div>
