@@ -248,7 +248,7 @@
             return <div ref={ref} className="w-full overflow-x-auto flex justify-center py-4 bg-white rounded-lg border border-slate-100"></div>;
         };
 
-        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, minimal = false }) => {
+        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, onAskCdmExplanation, minimal = false }) => {
             if (!scenario) return null;
             let severityClass = 'bg-blue-50 text-blue-600 border-blue-200';
             if(scenario.severity==='Critical') severityClass = 'bg-rose-900 text-white border-rose-900';
@@ -263,13 +263,22 @@
 
             if (minimal) {
                 return (
-                    <div className="border-b border-gray-100 last:border-0 pb-2 mb-2">
+                    <div className="border-b border-gray-100 last:border-0 pb-2 mb-2 relative group">
                         <div className="flex items-center justify-between mb-1">
                             <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${severityClass}`}>{scenario.severity}</span>
                             <span className="text-[10px] text-gray-400">{scenario.source_date?.split(' ')[0]}</span>
                         </div>
-                        <div className="font-bold text-slate-800 text-xs truncate" title={scenario.title}>{scenario.title}</div>
+                        <div className="font-bold text-slate-800 text-xs truncate pr-6" title={scenario.title}>{scenario.title}</div>
                         <div className="text-[10px] text-slate-500 truncate" title={scenario.correlation_logic}>{scenario.correlation_logic}</div>
+                        {onAskCdmExplanation && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onAskCdmExplanation(scenario); }}
+                                className="absolute right-0 top-5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded shadow-sm border border-indigo-100 p-1"
+                                title="向長官解釋：為什麼歸類在此區塊？"
+                            >
+                                <LucideIcons.HelpCircle size={14}/>
+                            </button>
+                        )}
                     </div>
                 );
             }
@@ -368,7 +377,7 @@
                 LayoutDashboard, GanttChartSquare, History, AlertOctagon, AlertTriangle, Info,
                 FileText, CheckCircle, Rocket, Mail, MessageCircleQuestion, FilePenLine, FileCode, FileSpreadsheet,
                 Fingerprint, Network, Laptop, Lock, Save, MessageSquare, Send, X, Code2, ShieldAlert, FileJson, Bug, Microscope,
-                Footprints, Globe, Scale, Terminal, BookOpen, Eye, Waypoints, Library, Key, Grid3X3, Volume2, Swords, Users
+                Footprints, Globe, Scale, Terminal, BookOpen, Eye, Waypoints, Library, Key, Grid3X3, Volume2, Swords, Users, Database, PieChart, HelpCircle
             } = LucideIcons;
 
             // --- States ---
@@ -432,6 +441,12 @@
             
             // Visualization State
             const [selectedScenarioForVis, setSelectedScenarioForVis] = useState(null);
+
+            // CDM Explanation State
+            const [cdmExplanationModalOpen, setCdmExplanationModalOpen] = useState(false);
+            const [cdmExplanationLoading, setCdmExplanationLoading] = useState(false);
+            const [cdmExplanationResult, setCdmExplanationResult] = useState('');
+            const [selectedScenarioForCdm, setSelectedScenarioForCdm] = useState(null);
 
             // Simulation State
             const [simScenario, setSimScenario] = useState(null);
@@ -518,12 +533,12 @@
                 return () => unsubscribe();
             }, []);
 
-            // Data Sync
+            // Data Sync (Using strictly formatted Canvas Firebase paths)
             useEffect(() => {
                 if (!user) return;
                 setSyncStatus('connecting');
                 
-                const assetsQuery = doc(db, 'artifacts', appId, 'shared_data', 'assets');
+                const assetsQuery = doc(db, 'artifacts', appId, 'public', 'data', 'assets', 'global');
                 const unsubAssets = onSnapshot(assetsQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -531,7 +546,7 @@
                     }
                 }, (err) => handleSyncError(err));
 
-                const historyQuery = doc(db, 'artifacts', appId, 'shared_data', 'threatHistory');
+                const historyQuery = doc(db, 'artifacts', appId, 'public', 'data', 'threatHistory', 'global');
                 const unsubHistory = onSnapshot(historyQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -544,7 +559,7 @@
                     }
                 }, (err) => handleSyncError(err));
 
-                const playbookQuery = doc(db, 'artifacts', appId, 'shared_data', 'playbookHistory');
+                const playbookQuery = doc(db, 'artifacts', appId, 'public', 'data', 'playbookHistory', 'global');
                 const unsubPlaybook = onSnapshot(playbookQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -555,7 +570,7 @@
                      setSyncStatus('synced');
                 }, (err) => handleSyncError(err));
                 
-                const guidesQuery = doc(db, 'artifacts', appId, 'shared_data', 'logGuides');
+                const guidesQuery = doc(db, 'artifacts', appId, 'public', 'data', 'logGuides', 'global');
                 const unsubGuides = onSnapshot(guidesQuery, (docSnapshot) => {
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
@@ -587,7 +602,7 @@
                 }
                 setSyncStatus('connecting');
                 try {
-                    await setDoc(doc(db, 'artifacts', appId, 'shared_data', collectionName), { items: dataValue });
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, 'global'), { items: dataValue });
                     setSyncStatus('synced');
                     setLastSaved(new Date().toLocaleTimeString());
                     setDbError(''); 
@@ -612,7 +627,6 @@
             const handleAddAssetRow = () => { const newId = Math.max(0, ...assetList.map(a => a.id)) + 1; const newList = [...assetList, { id: newId, category: "", name: "", note: "" }]; setAssetList(newList); saveAssetsToDB(newList); };
             const handleDeleteAssetRow = (id) => { const newList = assetList.filter(a => a.id !== id); setAssetList(newList); saveAssetsToDB(newList); };
             const handleUpdateAssetRow = (id, field, value) => { const newList = assetList.map(a => a.id === id ? { ...a, [field]: value } : a); setAssetList(newList); saveAssetsToDB(newList); };
-            const handleMoveAssetRow = (index, direction) => { const newList = [...assetList]; if (direction === 'up' && index > 0) { [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]]; } else if (direction === 'down' && index < newList.length - 1) { [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]]; } setAssetList(newList); saveAssetsToDB(newList); };
             const handleQuickAddAsset = (e) => { const value = e.target.value; if (!value) return; const newId = Math.max(0, ...assetList.map(a => a.id)) + 1; let category = "其他"; for (const [cat, items] of Object.entries(commonSystems)) { if (items.includes(value)) { category = cat; break; } } const newList = [...assetList, { id: newId, category: category, name: value, note: "" }]; setAssetList(newList); saveAssetsToDB(newList); e.target.value = ""; };
 
             const fetchGeminiResponse = async (prompt) => {
@@ -784,7 +798,6 @@
                 } catch (e) { console.error(e); } finally { setThreatLoading(false); }
             };
 
-            // New: Handle Visualization Modal
             const handleVisualize = (scenario) => {
                 setSelectedScenarioForVis(scenario);
                 setVisualizeModalOpen(true);
@@ -857,6 +870,41 @@
 
                 return matrix;
             }, [aggregatedHistory, cdmFilter]);
+
+            // --- New Handler: CDM Explanation ---
+            const handleAskCdmExplanation = async (scenario) => {
+                const { functionType, assetType } = getCDMCell(scenario);
+                setSelectedScenarioForCdm({ ...scenario, functionType, assetType });
+                setCdmExplanationModalOpen(true);
+                setCdmExplanationLoading(true);
+                setCdmExplanationResult('');
+
+                const prompt = `
+                Role: 資深資安架構師與 GRC 專家 (精通 NIST CSF 2.0 與 Cyber Defense Matrix)。
+                任務：向高階長官（CISO/CIO）解釋為什麼以下「威脅情境」會被歸類在 CDM 戰情矩陣的特定框格中。
+                
+                威脅情境：${scenario.title} (${scenario.category})
+                關聯邏輯：${scenario.correlation_logic}
+                
+                該情境被系統判定落在 CDM 矩陣的：
+                - 功能面 (NIST CSF Function): ${functionType} (屬於: IDENTIFY, PROTECT, DETECT, RESPOND, RECOVER, GOVERN 之一)
+                - 資產面 (Asset Type): ${assetType} (屬於: DEVICES, APPLICATIONS, NETWORKS, DATA, USERS 之一)
+                
+                請產出一份簡短、專業且易懂的說明（繁體中文），包含：
+                1. **歸類原因 (Why here?)**：一句話精準解釋為什麼是這個特定的矩陣組合（例如：為什麼是 GOVERN + USERS）。
+                2. **高階管理意涵 (Executive Summary)**：這對組織的資安管理有什麼實質影響？長官需要注意什麼戰略性風險？
+                3. **決策建議 (Next Steps)**：從這兩個維度出發，給予高階主管的防禦投資、政策修訂或管理決策建議。
+                `;
+
+                try {
+                    const reply = await fetchGeminiResponse(prompt);
+                    setCdmExplanationResult(reply);
+                } catch (error) {
+                    setCdmExplanationResult("生成解析失敗：" + error.message);
+                } finally {
+                    setCdmExplanationLoading(false);
+                }
+            };
 
             // --- RACI Matrix Logic ---
             const raciMatrixData = useMemo(() => {
@@ -1778,6 +1826,7 @@
                                                                                     onGenerateIRPlaybook={handleGenerateIRPlaybook} 
                                                                                     onVisualize={handleVisualize}
                                                                                     onSimulate={handleStartSimulation}
+                                                                                    onAskCdmExplanation={handleAskCdmExplanation}
                                                                                 />
                                                                             ))
                                                                         )}
@@ -2300,6 +2349,48 @@ service cloud.firestore {
                                             <div className="h-full flex items-center justify-center text-gray-400 text-xs">分析結果將顯示於此...</div>
                                         )}
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                     )}
+
+                     {/* CDM Explanation Modal */}
+                     {cdmExplanationModalOpen && selectedScenarioForCdm && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white rounded-xl w-full max-w-2xl h-auto max-h-[85vh] flex flex-col shadow-2xl">
+                                <div className="bg-slate-900 text-white p-4 flex justify-between items-center rounded-t-xl shrink-0">
+                                    <h3 className="font-bold text-lg flex items-center gap-2"><Grid3X3/> CDM 矩陣歸類解析 <span className="text-xs bg-indigo-600 px-2 py-0.5 rounded ml-2">高階匯報模式</span></h3>
+                                    <button onClick={() => setCdmExplanationModalOpen(false)} className="hover:text-gray-300"><X size={20}/></button>
+                                </div>
+                                <div className="p-6 flex-1 overflow-y-auto bg-slate-50">
+                                    <div className="mb-5 bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+                                        <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
+                                        <h4 className="font-bold text-slate-800 text-base mb-2">{selectedScenarioForCdm.title}</h4>
+                                        <div className="flex gap-3 text-xs mt-3">
+                                            <div className="flex flex-col">
+                                                <span className="text-gray-400 font-bold mb-1">NIST CSF 功能面</span>
+                                                <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded font-bold border border-indigo-200 flex items-center gap-1"><Scale size={12}/> {selectedScenarioForCdm.functionType}</span>
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <span className="text-gray-400 font-bold mb-1">保護標的 / 資產</span>
+                                                <span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded font-bold border border-emerald-200 flex items-center gap-1"><Target size={12}/> {selectedScenarioForCdm.assetType}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {cdmExplanationLoading ? (
+                                        <div className="flex flex-col items-center justify-center py-16 text-indigo-500">
+                                            <Loader2 size={40} className="mb-4 animate-spin"/>
+                                            <p className="font-bold text-sm">正在產生高階主管解說報告...</p>
+                                        </div>
+                                    ) : (
+                                        <div className="prose prose-sm max-w-none bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                            {renderMarkdown(cdmExplanationResult)}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="p-4 border-t bg-gray-100 flex justify-end rounded-b-xl shrink-0">
+                                    <button onClick={() => setCdmExplanationModalOpen(false)} className="bg-slate-700 text-white px-6 py-2 rounded-lg text-sm font-bold hover:bg-slate-800 transition-colors">關閉</button>
                                 </div>
                             </div>
                         </div>
