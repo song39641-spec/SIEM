@@ -251,7 +251,7 @@
             return <div ref={ref} className="w-full overflow-x-auto flex justify-center py-4 bg-white rounded-lg border border-slate-100"></div>;
         };
 
-        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, onAskCdmExplanation, minimal = false }) => {
+        const ScenarioCard = ({ scenario, onAskMitigation, onAskRule, onGenerateLogs, onDraftEmail, onAskThreatIntel, onAskCompliance, onGenerateIRPlaybook, onVisualize, onSimulate, onAskCdmExplanation, onDelete, minimal = false }) => {
             if (!scenario) return null;
             let severityClass = 'bg-blue-50 text-blue-600 border-blue-200';
             if(scenario.severity==='Critical') severityClass = 'bg-rose-900 text-white border-rose-900';
@@ -280,23 +280,44 @@
                             {topicLabel && <span className="text-[8px] bg-rose-50 px-1 py-0.5 rounded text-rose-600 border border-rose-100 truncate max-w-[60px]" title={topicLabel}>議題: {topicLabel}</span>}
                         </div>
                         <div className="text-[10px] text-slate-500 truncate" title={scenario.correlation_logic}>{scenario.correlation_logic}</div>
-                        {onAskCdmExplanation && (
-                            <button
-                                onClick={(e) => { e.stopPropagation(); onAskCdmExplanation(scenario); }}
-                                className="absolute right-0 top-5 text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded shadow-sm border border-indigo-100 p-1"
-                                title="向長官解釋：為什麼歸類在此區塊？"
-                            >
-                                <LucideIcons.HelpCircle size={14}/>
-                            </button>
-                        )}
+                        
+                        <div className="absolute right-0 top-5 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {onAskCdmExplanation && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onAskCdmExplanation(scenario); }}
+                                    className="text-indigo-400 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded shadow-sm border border-indigo-100 p-1"
+                                    title="向長官解釋：為什麼歸類在此區塊？"
+                                >
+                                    <LucideIcons.HelpCircle size={14}/>
+                                </button>
+                            )}
+                            {onDelete && (
+                                <button
+                                    onClick={(e) => onDelete(e, scenario)}
+                                    className="text-red-400 hover:text-red-600 bg-red-50 hover:bg-red-100 rounded shadow-sm border border-red-100 p-1"
+                                    title="單獨刪除此情境"
+                                >
+                                    <LucideIcons.Trash size={14}/>
+                                </button>
+                            )}
+                        </div>
                     </div>
                 );
             }
 
             return (
                 <div className="border border-slate-200 rounded-lg p-4 bg-white hover:shadow-md transition-shadow mb-3 text-sm group relative">
+                    {onDelete && (
+                        <button 
+                            onClick={(e) => onDelete(e, scenario)} 
+                            className="absolute top-4 right-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity bg-white rounded p-1" 
+                            title="單獨刪除此情境"
+                        >
+                            <LucideIcons.Trash size={16}/>
+                        </button>
+                    )}
                     <div className="flex justify-between items-start mb-2">
-                        <div className="w-full">
+                        <div className="w-full pr-8">
                             <div className="flex items-center gap-2 flex-wrap mb-1">
                                 <span className={`text-xs px-2 py-0.5 rounded border font-bold ${severityClass}`}><SafeText content={scenario.severity}/></span>
                                 <span className="font-bold text-slate-800 text-base"><SafeText content={scenario.title}/></span>
@@ -1067,10 +1088,56 @@
                 showToast('已清空所有紀錄');
             };
 
+            const handleDeleteSingleScenario = (e, scenario) => {
+                e.stopPropagation();
+                if(!confirm(`確定要單獨刪除情境「${scenario.title}」嗎？`)) return;
+
+                const updatedHistory = threatHistory.map(history => {
+                    const hasScenario = history.scenarios?.some(s => s.title === scenario.title && s.correlation_logic === scenario.correlation_logic);
+                    if (hasScenario && (!scenario.source_date || history.timestamp === scenario.source_date)) {
+                        return {
+                            ...history,
+                            scenarios: history.scenarios.filter(s => s.title !== scenario.title || s.correlation_logic !== scenario.correlation_logic)
+                        };
+                    }
+                    return history;
+                });
+
+                // 過濾掉情境已經被清空的批次紀錄
+                const cleanedHistory = updatedHistory.filter(h => h.scenarios && h.scenarios.length > 0);
+
+                setThreatHistory(cleanedHistory);
+                saveHistoryToDB(cleanedHistory);
+
+                // 同步更新當前檢視畫面
+                if (threatData) {
+                    const updatedCurrent = cleanedHistory.find(h => h.timestamp === threatData.timestamp);
+                    setThreatData(updatedCurrent || null);
+                }
+                showToast('已刪除個別情境');
+            };
+
             const handleExportCDMPNG = async () => {
                 const element = document.getElementById('cdm-matrix-container');
                 if (!element) return;
                 setIsExportingCDM(true);
+                
+                // 匯出前：強制解除所有捲軸框的高度限制，讓 DOM 完全撐開
+                const expandableCells = element.querySelectorAll('.export-expandable');
+                const originalStyles = [];
+                expandableCells.forEach(cell => {
+                    originalStyles.push({ 
+                        el: cell, 
+                        maxHeight: cell.style.maxHeight, 
+                        overflowY: cell.style.overflowY 
+                    });
+                    cell.style.maxHeight = 'none';
+                    cell.style.overflowY = 'visible';
+                });
+
+                // 等待 200ms 讓瀏覽器重新計算完整排版
+                await new Promise(r => setTimeout(r, 200));
+
                 try {
                     const canvas = await window.html2canvas(element, { 
                         backgroundColor: '#ffffff', // 設定背景為白色避免透明變黑
@@ -1087,6 +1154,11 @@
                     console.error("Export failed", err);
                     showToast('匯出圖片失敗', 'error');
                 } finally {
+                    // 匯出後：將捲軸框恢復原始高度設定
+                    originalStyles.forEach(({ el, maxHeight, overflowY }) => {
+                        el.style.maxHeight = maxHeight;
+                        el.style.overflowY = overflowY;
+                    });
                     setIsExportingCDM(false);
                 }
             };
@@ -1678,6 +1750,7 @@
                                                                     onGenerateIRPlaybook={handleGenerateIRPlaybook}
                                                                     onVisualize={handleVisualize}
                                                                     onSimulate={handleStartSimulation}
+                                                                    onDelete={handleDeleteSingleScenario}
                                                                 />
                                                             ))}
                                                         </div>
@@ -1857,7 +1930,7 @@
                                                                 {level} Priority <span className="bg-white px-2 py-0.5 rounded text-xs border shadow-sm">{aggregatedHistory.byRisk[level]?.length || 0}</span>
                                                             </div>
                                                             <div className="p-3 overflow-y-auto flex-1 bg-slate-50 space-y-3">
-                                                                {aggregatedHistory.byRisk[level]?.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail} onAskThreatIntel={handleAskThreatIntel} onAskCompliance={handleComplianceAnalysis} onGenerateIRPlaybook={handleGenerateIRPlaybook} onVisualize={handleVisualize} onSimulate={handleStartSimulation}/>)}
+                                                                {aggregatedHistory.byRisk[level]?.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail} onAskThreatIntel={handleAskThreatIntel} onAskCompliance={handleComplianceAnalysis} onGenerateIRPlaybook={handleGenerateIRPlaybook} onVisualize={handleVisualize} onSimulate={handleStartSimulation} onDelete={handleDeleteSingleScenario}/>)}
                                                                 {(!aggregatedHistory.byRisk[level]?.length) && <div className="text-center text-gray-400 text-xs mt-20">無資料</div>}
                                                             </div>
                                                         </div>
@@ -1877,7 +1950,7 @@
                                                         </div>
                                                         {items.length > 0 && (
                                                             <div className="p-2 max-h-[300px] overflow-y-auto bg-slate-50 space-y-2">
-                                                                {items.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail} onAskThreatIntel={handleAskThreatIntel} onAskCompliance={handleComplianceAnalysis} onGenerateIRPlaybook={handleGenerateIRPlaybook} onVisualize={handleVisualize} onSimulate={handleStartSimulation}/>)}
+                                                                {items.map((s, idx) => <ScenarioCard key={idx} scenario={s} onAskMitigation={handleAskMitigation} onAskRule={handleAskRule} onGenerateLogs={handleGenerateMockLog} onDraftEmail={handleDraftEmail} onAskThreatIntel={handleAskThreatIntel} onAskCompliance={handleComplianceAnalysis} onGenerateIRPlaybook={handleGenerateIRPlaybook} onVisualize={handleVisualize} onSimulate={handleStartSimulation} onDelete={handleDeleteSingleScenario}/>)}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1975,7 +2048,7 @@
                                                                         {items.length > 0 ? items.length : ''}
                                                                     </div>
                                                                     
-                                                                    <div className="flex-1 overflow-y-auto max-h-[250px] custom-scrollbar pr-1">
+                                                                    <div className="flex-1 overflow-y-auto max-h-[250px] custom-scrollbar pr-1 export-expandable">
                                                                         {items.length === 0 ? (
                                                                             <div className="h-full flex items-center justify-center">
                                                                                 <div className="w-1 h-1 rounded-full bg-gray-200"></div>
@@ -1996,6 +2069,7 @@
                                                                                     onVisualize={handleVisualize}
                                                                                     onSimulate={handleStartSimulation}
                                                                                     onAskCdmExplanation={handleAskCdmExplanation}
+                                                                                    onDelete={handleDeleteSingleScenario}
                                                                                 />
                                                                             ))
                                                                         )}
