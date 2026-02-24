@@ -14,6 +14,9 @@
     <!-- 3. 引入 Mermaid.js (用於畫圖) -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
 
+    <!-- 3.1 引入 html2canvas (用於匯出圖片) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
     <!-- 4. 設定 Tailwind 主題 -->
     <script>
       tailwind.config = {
@@ -451,6 +454,9 @@
             const [summaryContent, setSummaryContent] = useState('');
             const [summaryLoading, setSummaryLoading] = useState(false);
             
+            // CDM Export State
+            const [isExportingCDM, setIsExportingCDM] = useState(false);
+
             // Visualization State
             const [selectedScenarioForVis, setSelectedScenarioForVis] = useState(null);
 
@@ -1038,6 +1044,51 @@
                  element.href = URL.createObjectURL(file);
                  element.download = `SIEM_Report_${new Date().toISOString().slice(0,10)}.txt`;
                  document.body.appendChild(element); element.click(); document.body.removeChild(element);
+            };
+
+            const handleDeleteSingleHistory = (e, timestamp) => {
+                e.stopPropagation();
+                if(!confirm('確定要刪除這筆威脅分析紀錄嗎？')) return;
+                const newHistory = threatHistory.filter(h => h.timestamp !== timestamp);
+                setThreatHistory(newHistory);
+                saveHistoryToDB(newHistory);
+                if(threatData?.timestamp === timestamp) {
+                    setThreatData(null);
+                    setThreatViewTab('history');
+                }
+                showToast('已刪除紀錄');
+            };
+
+            const handleClearAllHistory = () => {
+                if(!confirm('⚠️ 警告：確定要清空所有威脅分析紀錄嗎？此操作無法復原。')) return;
+                setThreatHistory([]);
+                saveHistoryToDB([]);
+                setThreatData(null);
+                showToast('已清空所有紀錄');
+            };
+
+            const handleExportCDMPNG = async () => {
+                const element = document.getElementById('cdm-matrix-container');
+                if (!element) return;
+                setIsExportingCDM(true);
+                try {
+                    const canvas = await window.html2canvas(element, { 
+                        backgroundColor: '#ffffff', // 設定背景為白色避免透明變黑
+                        scale: 2, // 提高解析度
+                        useCORS: true
+                    });
+                    const dataURL = canvas.toDataURL('image/png');
+                    const a = document.createElement('a');
+                    a.href = dataURL;
+                    a.download = `CDM_戰情矩陣_${new Date().toISOString().slice(0,10)}.png`;
+                    a.click();
+                    showToast('CDM 矩陣已成功匯出圖片');
+                } catch (err) {
+                    console.error("Export failed", err);
+                    showToast('匯出圖片失敗', 'error');
+                } finally {
+                    setIsExportingCDM(false);
+                }
             };
 
             const handleDeleteHistory = (e, id) => { 
@@ -1637,9 +1688,23 @@
                                      ) : (
                                          <div className="space-y-3">
                                             {threatHistory.length === 0 && <div className="text-center text-gray-400 mt-20">尚無歷史紀錄</div>}
+                                            {threatHistory.length > 0 && (
+                                                <div className="flex justify-end mb-2">
+                                                    <button onClick={handleClearAllHistory} className="text-xs text-red-500 hover:text-white hover:bg-red-500 border border-red-200 px-3 py-1 rounded transition-colors flex items-center gap-1 shadow-sm">
+                                                        <Trash size={12}/> 清空所有紀錄
+                                                    </button>
+                                                </div>
+                                            )}
                                             {threatHistory.map((history, idx) => (
-                                                <div key={idx} onClick={() => { setThreatData(history); setThreatViewTab('current'); }} className="p-4 border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-md cursor-pointer transition-all bg-white group">
-                                                    <div className="flex justify-between items-center mb-1">
+                                                <div key={idx} onClick={() => { setThreatData(history); setThreatViewTab('current'); }} className="p-4 border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-md cursor-pointer transition-all bg-white group relative">
+                                                    <button 
+                                                        onClick={(e) => handleDeleteSingleHistory(e, history.timestamp)}
+                                                        className="absolute top-4 right-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity bg-white border border-gray-100 p-1.5 rounded-md shadow-sm"
+                                                        title="刪除此紀錄"
+                                                    >
+                                                        <Trash size={14}/>
+                                                    </button>
+                                                    <div className="flex justify-between items-center mb-1 pr-8">
                                                         <h5 className="font-bold text-indigo-700 flex items-center gap-2"><History size={16}/> <SafeText content={history.context_dimension || history.analysis_type}/></h5>
                                                         <span className="text-xs text-gray-400"><SafeText content={history.timestamp}/></span>
                                                     </div>
@@ -1848,12 +1913,20 @@
                                             <div className="bg-white px-4 py-2 rounded-lg border border-gray-200 shadow-sm text-sm font-bold text-slate-600">
                                                 情境總數: {Object.values(aggregatedHistory.byRisk).flat().length}
                                             </div>
+                                            <button 
+                                                onClick={handleExportCDMPNG}
+                                                disabled={isExportingCDM}
+                                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50"
+                                                title="將目前的矩陣匯出為高畫質 PNG 圖片"
+                                            >
+                                                {isExportingCDM ? <Loader2 size={16} className="animate-spin"/> : <LucideIcons.Image size={16}/>} 匯出圖片
+                                            </button>
                                         </div>
                                     </div>
 
                                     {/* The Matrix */}
-                                    <div className="bg-white rounded-2xl border border-gray-200 shadow-xl overflow-hidden">
-                                        <div className="grid grid-cols-6 divide-x divide-gray-200 border-b border-gray-200 bg-slate-50 text-sm font-bold text-slate-700 uppercase tracking-wider">
+                                    <div id="cdm-matrix-container" className="bg-white rounded-2xl border border-gray-200 shadow-xl overflow-hidden p-1">
+                                        <div className="grid grid-cols-6 divide-x divide-gray-200 border-b border-gray-200 bg-slate-50 text-sm font-bold text-slate-700 uppercase tracking-wider rounded-t-xl">
                                             <div className="p-4 flex items-center justify-center bg-slate-100 text-slate-500">Functions / Assets</div>
                                             <div className="p-4 text-center">Devices</div>
                                             <div className="p-4 text-center">Applications</div>
