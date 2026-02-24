@@ -416,6 +416,7 @@
 
             const [aiSuggestingAssets, setAiSuggestingAssets] = useState(false);
             const [analysisType, setAnalysisType] = useState('ALL');
+            const [specificTopic, setSpecificTopic] = useState('ALL'); // 新增明確威脅議題狀態
 
             // Modals States
             const [logParserOpen, setLogParserOpen] = useState(false);
@@ -485,6 +486,26 @@
                 { id: 'NETWORK', label: '網路邊界與異常連線' },
                 { id: 'ENDPOINT', label: '端點行為與惡意程式' },
                 { id: 'SYSTEM', label: '防禦規避與系統健康' },
+            ];
+
+            // 新增：明確威脅議題清單 (對應使用者附圖)
+            const specificThreatTopics = [
+                { id: 'ALL', label: '不指定 (由 AI 全面發想)' },
+                { id: 'BRUTE_FORCE', label: '暴力破解 (Brute Force)' },
+                { id: 'ABNORMAL_TIME', label: '異常時段登入 (Abnormal Login Time)' },
+                { id: 'ABNORMAL_GEO', label: '異常地理位置 (Abnormal Geo-location)' },
+                { id: 'PRIV_ESCALATION', label: '特權提升 (Privilege Escalation)' },
+                { id: 'C2_CONNECTION', label: 'C2 中繼站連線 (C2 Connection)' },
+                { id: 'DATA_EXFIL', label: '資料外洩偵測 (Data Exfiltration)' },
+                { id: 'NET_SCAN', label: '網路掃描 (Network Scanning)' },
+                { id: 'VPN_ABNORMAL', label: 'VPN 異常連線 (VPN Abnormal Connection)' },
+                { id: 'RANSOMWARE', label: '勒索軟體行為 (Ransomware Behavior)' },
+                { id: 'LATERAL_MOVE', label: '橫向移動 (Lateral Movement)' },
+                { id: 'SUS_POWERSHELL', label: '可疑 PowerShell (Suspicious PowerShell)' },
+                { id: 'CLEAR_TRACKS', label: '清除軌跡 (Clear Tracks)' },
+                { id: 'SILENT_DETECT', label: '沉默偵測 (Silent Detection)' },
+                { id: 'UNAUTH_SW', label: '違規軟體 (Unauthorized Software)' },
+                { id: 'SVC_STOPPED', label: '資安服務停止 (Security Service Stopped)' },
             ];
 
             // Firebase Init
@@ -722,15 +743,19 @@
                 const analysisLabel = selectedOption ? selectedOption.label : "綜合交叉關聯分析";
                 let contextPrompt = analysisType === 'ALL' ? "全方位交叉關聯威脅分析" : `專注於「${analysisLabel}」領域進行深度分析。忽略不相關的威脅。`;
 
+                // 處理明確議題參數
+                const selectedTopicObj = specificThreatTopics.find(o => o.id === specificTopic);
+                const specificTopicPrompt = specificTopic === 'ALL' ? '' : `\n**特別要求**：請務必強制包含以「${selectedTopicObj.label}」為核心的具體威脅情境！`;
+
                 const prompt = `
                 你是一位資深 SIEM 與 SOC 架構師。請根據以下客戶的資產清單，進行：${contextPrompt}
                 資產清單：${assetString}
                 
                 任務：
-                1. 找出可能發生的攻擊路徑。
+                1. 找出可能發生的攻擊路徑。${specificTopicPrompt}
                 2. 建議收集的 Log 與關聯規則。
                 3. 產出 5 到 10 個具體的情境。
-                4. Risk Level 請包含 "Critical", "High", "Medium", "Low" 四種。
+                4. **風險等級強制要求**：Risk Level 必須包含 "Critical", "High", "Medium", "Low"。請不要只產出嚴重威脅，必須強制生成至少 2 個 "Medium" (中度風險) 以及至少 1 個 "Low" (低度風險，例如：組態變更、常規違規、資訊探測等) 的情境。
                 5. 請務必將每個情境嚴格歸類到以下四類之一 (Category)：
                    - 身分與存取威脅
                    - 網路邊界與異常連線
@@ -876,29 +901,55 @@
                 const { functionType, assetType } = getCDMCell(scenario);
                 setSelectedScenarioForCdm({ ...scenario, functionType, assetType });
                 setCdmExplanationModalOpen(true);
+                
+                // 檢查是否已經有快取紀錄，有則秒開
+                if (scenario.cdm_explanation) {
+                    setCdmExplanationResult(scenario.cdm_explanation);
+                    setCdmExplanationLoading(false);
+                    return;
+                }
+
                 setCdmExplanationLoading(true);
                 setCdmExplanationResult('');
 
                 const prompt = `
-                Role: 資深資安架構師與 GRC 專家 (精通 NIST CSF 2.0 與 Cyber Defense Matrix)。
-                任務：向高階長官（CISO/CIO）解釋為什麼以下「威脅情境」會被歸類在 CDM 戰情矩陣的特定框格中。
+                Role: 資安 GRC 專家。
+                任務：用「一句話」簡潔說明，為什麼以下威脅情境會被放在 Cyber Defense Matrix 的這個位置。直接講重點，不要有任何多餘的建議或廢話。
                 
                 威脅情境：${scenario.title} (${scenario.category})
                 關聯邏輯：${scenario.correlation_logic}
                 
-                該情境被系統判定落在 CDM 矩陣的：
-                - 功能面 (NIST CSF Function): ${functionType} (屬於: IDENTIFY, PROTECT, DETECT, RESPOND, RECOVER, GOVERN 之一)
-                - 資產面 (Asset Type): ${assetType} (屬於: DEVICES, APPLICATIONS, NETWORKS, DATA, USERS 之一)
+                該情境所在的矩陣位置：
+                - NIST CSF 功能面: ${functionType}
+                - 保護資產面: ${assetType}
                 
-                請產出一份簡短、專業且易懂的說明（繁體中文），包含：
-                1. **歸類原因 (Why here?)**：一句話精準解釋為什麼是這個特定的矩陣組合（例如：為什麼是 GOVERN + USERS）。
-                2. **高階管理意涵 (Executive Summary)**：這對組織的資安管理有什麼實質影響？長官需要注意什麼戰略性風險？
-                3. **決策建議 (Next Steps)**：從這兩個維度出發，給予高階主管的防禦投資、政策修訂或管理決策建議。
+                請直接輸出簡短說明（繁體中文），範例格式：「因為此情境涉及對員工帳號的暴力破解（USERS），且屬於防禦設備的監控與告警階段（DETECT）。」
                 `;
 
                 try {
                     const reply = await fetchGeminiResponse(prompt);
                     setCdmExplanationResult(reply);
+                    
+                    // 將解釋寫入快取 (保存回 state 與 DB)
+                    const updatedHistory = threatHistory.map(history => {
+                        const updatedScenarios = history.scenarios?.map(s => {
+                            if (s.title === scenario.title && s.correlation_logic === scenario.correlation_logic) {
+                                return { ...s, cdm_explanation: reply };
+                            }
+                            return s;
+                        });
+                        return { ...history, scenarios: updatedScenarios };
+                    });
+                    
+                    setThreatHistory(updatedHistory);
+                    saveHistoryToDB(updatedHistory);
+                    
+                    // 若當前查看的視圖正是此紀錄，也需一併更新
+                    if (threatData && threatData.timestamp) {
+                        const currentMatch = updatedHistory.find(h => h.timestamp === threatData.timestamp);
+                        if (currentMatch) setThreatData(currentMatch);
+                    }
+
                 } catch (error) {
                     setCdmExplanationResult("生成解析失敗：" + error.message);
                 } finally {
@@ -1403,11 +1454,19 @@
                                         </div>
                                         <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">分析維度 (Focus)</label>
                                         <select 
-                                          className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-indigo-50 text-indigo-900 font-medium" 
+                                          className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-indigo-50 text-indigo-900 font-medium mb-3" 
                                           value={analysisType}
                                           onChange={(e)=>setAnalysisType(e.target.value)}
                                         >
                                            {analysisOptions.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+                                        </select>
+                                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-1">明確威脅議題 (Topic)</label>
+                                        <select 
+                                          className="w-full p-2 text-sm border border-gray-200 rounded-lg outline-none bg-rose-50 text-rose-900 font-medium" 
+                                          value={specificTopic}
+                                          onChange={(e)=>setSpecificTopic(e.target.value)}
+                                        >
+                                           {specificThreatTopics.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
                                         </select>
                                     </div>
 
@@ -2359,7 +2418,7 @@ service cloud.firestore {
                         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 animate-in fade-in">
                             <div className="bg-white rounded-xl w-full max-w-2xl h-auto max-h-[85vh] flex flex-col shadow-2xl">
                                 <div className="bg-slate-900 text-white p-4 flex justify-between items-center rounded-t-xl shrink-0">
-                                    <h3 className="font-bold text-lg flex items-center gap-2"><Grid3X3/> CDM 矩陣歸類解析 <span className="text-xs bg-indigo-600 px-2 py-0.5 rounded ml-2">高階匯報模式</span></h3>
+                                    <h3 className="font-bold text-lg flex items-center gap-2"><Grid3X3/> CDM 矩陣歸類解析 <span className="text-xs bg-emerald-600 px-2 py-0.5 rounded ml-2">簡明解析模式</span></h3>
                                     <button onClick={() => setCdmExplanationModalOpen(false)} className="hover:text-gray-300"><X size={20}/></button>
                                 </div>
                                 <div className="p-6 flex-1 overflow-y-auto bg-slate-50">
@@ -2381,10 +2440,10 @@ service cloud.firestore {
                                     {cdmExplanationLoading ? (
                                         <div className="flex flex-col items-center justify-center py-16 text-indigo-500">
                                             <Loader2 size={40} className="mb-4 animate-spin"/>
-                                            <p className="font-bold text-sm">正在產生高階主管解說報告...</p>
+                                            <p className="font-bold text-sm">正在產生簡明原因說明...</p>
                                         </div>
                                     ) : (
-                                        <div className="prose prose-sm max-w-none bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                        <div className="prose prose-sm max-w-none bg-white p-6 rounded-xl border border-gray-200 shadow-sm text-slate-700 font-medium text-base">
                                             {renderMarkdown(cdmExplanationResult)}
                                         </div>
                                     )}
